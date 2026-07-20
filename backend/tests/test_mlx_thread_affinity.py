@@ -18,6 +18,7 @@ from backend.backends.mlx_tada_backend import MLXTadaBackend
 from backend.backends.qwen_llm_backend import MLXQwenLLMBackend, PyTorchQwenLLMBackend
 from backend.backends.rvc import acquire as rvc_acquire, release as rvc_release
 from backend.backends.voxtral_backend import VOXTRAL_SAMPLE_RATE, VoxtralTTSBackend
+from backend.services import llm as llm_service
 
 
 class _AudioResult:
@@ -70,6 +71,7 @@ class TestMLXThreadAffinity:
 
         assert len(set(results)) == 1
         assert len(seen_thread_ids) == 1
+        assert next(iter(seen_thread_ids)) != threading.get_ident()
 
     @pytest.mark.asyncio
     async def test_thread_local_state_survives_between_calls(self):
@@ -118,7 +120,7 @@ class TestMLXThreadAffinity:
         await backend.load_model("0.6B")
         worker_thread_id = await _run_on_mlx_thread(threading.get_ident)
 
-        assert seen["thread_name"] == "mlx_0"
+        assert str(seen["thread_name"]).startswith("mlx-worker")
         assert seen["thread_id"] == worker_thread_id
 
     @pytest.mark.asyncio
@@ -168,6 +170,48 @@ class TestMLXThreadAffinity:
         )
 
         assert (small, large) == ("0.6B", "4B")
+        assert len(seen_thread_ids) == 1
+
+    @pytest.mark.asyncio
+    async def test_llm_service_unload_waits_for_generation(self, monkeypatch):
+        backend = MLXQwenLLMBackend()
+        seen_thread_ids: set[int] = set()
+
+        def fake_load_model_sync(model_size: str) -> None:
+            seen_thread_ids.add(threading.get_ident())
+            backend.model = {"size": model_size}
+            backend.tokenizer = object()
+            backend._current_model_size = model_size
+            backend.model_size = model_size
+
+        def fake_unload_model_sync() -> None:
+            seen_thread_ids.add(threading.get_ident())
+            backend.model = None
+            backend.tokenizer = None
+            backend._current_model_size = None
+
+        def fake_generate_sync(*args, **kwargs) -> str:
+            seen_thread_ids.add(threading.get_ident())
+            resident = backend.model
+            assert resident is not None, "model was unloaded before generation"
+            time.sleep(0.02)
+            assert backend.model is resident, "model changed during generation"
+            return resident["size"]
+
+        monkeypatch.setattr(backend, "_load_model_sync", fake_load_model_sync)
+        monkeypatch.setattr(backend, "_unload_model_sync", fake_unload_model_sync)
+        monkeypatch.setattr(backend, "_generate_sync", fake_generate_sync)
+        monkeypatch.setattr(llm_service, "get_llm_backend", lambda: backend)
+
+        await backend.load_model("0.6B")
+
+        size, _ = await asyncio.gather(
+            backend.generate("a", model_size="0.6B"),
+            llm_service.unload_llm_model(),
+        )
+
+        assert size == "0.6B"
+        assert backend.model is None
         assert len(seen_thread_ids) == 1
 
     @pytest.mark.asyncio

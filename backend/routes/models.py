@@ -4,12 +4,10 @@ import asyncio
 import shutil
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
-from sqlalchemy.orm import Session
 
 from .. import models
-from ..utils.platform_detect import get_backend_type
 from ..services.task_queue import create_background_task
 from ..utils.progress import get_progress_manager
 from ..utils.tasks import get_task_manager
@@ -66,7 +64,7 @@ async def unload_model():
     from ..services import tts
 
     try:
-        tts.unload_tts_model()
+        await tts.unload_tts_model()
         return {"message": "Model unloaded successfully"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -82,7 +80,7 @@ async def unload_model_by_name(model_name: str):
         raise HTTPException(status_code=400, detail=f"Unknown model: {model_name}")
 
     try:
-        was_loaded = unload_model_by_config(config)
+        was_loaded = await unload_model_by_config(config)
         if not was_loaded:
             return {"message": f"Model {model_name} is not loaded"}
         return {"message": f"Model {model_name} unloaded successfully"}
@@ -228,7 +226,6 @@ async def get_model_status():
     """Get status of all available models."""
     from huggingface_hub import constants as hf_constants
 
-    backend_type = get_backend_type()
     task_manager = get_task_manager()
 
     # Pending only — an errored task stays in the active list for the
@@ -243,7 +240,7 @@ async def get_model_status():
     except ImportError:
         use_scan_cache = False
 
-    from ..backends import get_all_model_configs, check_model_loaded
+    from ..backends import check_model_loaded, get_all_model_configs
 
     registry_configs = get_all_model_configs()
     model_configs = [
@@ -500,6 +497,7 @@ async def cancel_model_download(request: models.ModelDownloadRequest):
 async def delete_model(model_name: str):
     """Delete a downloaded model from the HuggingFace cache."""
     from huggingface_hub import constants as hf_constants
+
     from ..backends import get_model_config, unload_model_by_config
 
     config = get_model_config(model_name)
@@ -525,7 +523,7 @@ async def delete_model(model_name: str):
     hf_repo_id = config.hf_repo_id
 
     try:
-        unload_model_by_config(config)
+        await unload_model_by_config(config)
 
         cache_dir = hf_constants.HF_HUB_CACHE
         repo_cache_dir = Path(cache_dir) / ("models--" + hf_repo_id.replace("/", "--"))

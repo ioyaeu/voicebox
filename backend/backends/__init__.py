@@ -10,13 +10,14 @@ and a model config registry that eliminates per-engine dispatch maps.
 # import time, which wraps transformers' tokenizer load against the
 # unconditional HuggingFace metadata call that otherwise raises on
 # HF_HUB_OFFLINE=1 and on network failures.
-from ..utils import hf_offline_patch  # noqa: F401
-
 import threading
 from dataclasses import dataclass, field
-from typing import Protocol, Optional, Tuple, List
-from typing_extensions import runtime_checkable
+from typing import List, Optional, Protocol, Tuple
+
 import numpy as np
+from typing_extensions import runtime_checkable
+
+from ..utils import hf_offline_patch  # noqa: F401
 
 DEFAULT_LLM_MAX_TOKENS = 512
 DEFAULT_LLM_TEMPERATURE = 0.7
@@ -684,16 +685,30 @@ async def ensure_model_cached_or_raise(engine: str, model_size: str = "default")
             )
 
 
-def unload_model_by_config(config: ModelConfig) -> bool:
+async def unload_backend(backend) -> None:
+    """Free a backend's model, serialized onto the MLX worker when it has one.
+
+    MLX backends expose an async ``unload`` that runs the free on the dedicated
+    MLX thread so it can't collide with an in-flight load/generate. Other
+    backends only carry the synchronous ``unload_model``.
+    """
+    unload = getattr(backend, "unload", None)
+    if unload is not None:
+        await unload()
+    else:
+        backend.unload_model()
+
+
+async def unload_model_by_config(config: ModelConfig) -> bool:
     """Unload a model given its config. Returns True if it was loaded, False otherwise."""
-    from . import get_tts_backend_for_engine
-    from ..services import tts, transcribe, llm as llm_service
+    from ..services import llm as llm_service, transcribe, tts
     from ..utils.cache import clear_voice_prompt_memory_cache
+    from . import get_tts_backend_for_engine
 
     if config.engine == "whisper":
         whisper_model = transcribe.get_whisper_model()
         if whisper_model.is_loaded() and whisper_model.model_size == config.model_size:
-            transcribe.unload_whisper_model()
+            await unload_backend(whisper_model)
             return True
         return False
 
@@ -701,7 +716,7 @@ def unload_model_by_config(config: ModelConfig) -> bool:
         backend = llm_service.get_llm_model()
         loaded_size = getattr(backend, "_current_model_size", None) or getattr(backend, "model_size", None)
         if backend.is_loaded() and loaded_size == config.model_size:
-            backend.unload_model()
+            await unload_backend(backend)
             return True
         return False
 
@@ -709,7 +724,7 @@ def unload_model_by_config(config: ModelConfig) -> bool:
         tts_model = tts.get_tts_model()
         loaded_size = getattr(tts_model, "_current_model_size", None) or getattr(tts_model, "model_size", None)
         if tts_model.is_loaded() and loaded_size == config.model_size:
-            tts.unload_tts_model()
+            await unload_backend(tts_model)
             return True
         return False
 
@@ -717,7 +732,7 @@ def unload_model_by_config(config: ModelConfig) -> bool:
         backend = get_tts_backend_for_engine(config.engine)
         loaded_size = getattr(backend, "_current_model_size", None) or getattr(backend, "model_size", None)
         if backend.is_loaded() and loaded_size == config.model_size:
-            backend.unload_model()
+            await unload_backend(backend)
             clear_voice_prompt_memory_cache()
             return True
         return False
@@ -726,7 +741,7 @@ def unload_model_by_config(config: ModelConfig) -> bool:
         backend = get_tts_backend_for_engine(config.engine)
         loaded_size = getattr(backend, "_current_model_size", None) or getattr(backend, "model_size", None)
         if backend.is_loaded() and loaded_size == config.model_size:
-            backend.unload_model()
+            await unload_backend(backend)
             clear_voice_prompt_memory_cache()
             return True
         return False
@@ -734,7 +749,7 @@ def unload_model_by_config(config: ModelConfig) -> bool:
     # All other TTS engines
     backend = get_tts_backend_for_engine(config.engine)
     if backend.is_loaded():
-        backend.unload_model()
+        await unload_backend(backend)
         clear_voice_prompt_memory_cache()
         return True
     return False
@@ -742,8 +757,8 @@ def unload_model_by_config(config: ModelConfig) -> bool:
 
 def check_model_loaded(config: ModelConfig) -> bool:
     """Check if a model is currently loaded."""
+    from ..services import llm as llm_service, transcribe, tts
     from . import get_tts_backend_for_engine
-    from ..services import tts, transcribe, llm as llm_service
 
     try:
         if config.engine == "whisper":
@@ -778,8 +793,8 @@ def check_model_loaded(config: ModelConfig) -> bool:
 
 def get_model_load_func(config: ModelConfig):
     """Return a callable that loads/downloads the model."""
+    from ..services import llm as llm_service, transcribe, tts
     from . import get_tts_backend_for_engine
-    from ..services import tts, transcribe, llm as llm_service
 
     if config.engine == "whisper":
         return lambda: transcribe.get_whisper_model().load_model(config.model_size)
