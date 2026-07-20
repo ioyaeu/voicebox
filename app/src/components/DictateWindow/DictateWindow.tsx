@@ -35,6 +35,10 @@ export function DictateWindow() {
     };
   }, []);
 
+  // Mirrored from the main window: true only when dictation is armed and the
+  // user opted into keeping the microphone ready.
+  const [micWarm, setMicWarm] = useState(false);
+
   // Snapshot of the focused UI element at chord-start, shipped over from
   // Rust on the ``dictate:start`` payload. Held in a ref so it survives
   // the 1–2 s transcribe + refine window — the paste only fires once the
@@ -42,6 +46,7 @@ export function DictateWindow() {
   const focusRef = useRef<FocusSnapshot | null>(null);
 
   const session = useCaptureRecordingSession({
+    keepMicWarm: micWarm,
     onFinalText: async (text, _capture, allowAutoPaste) => {
       const focus = focusRef.current;
       // Consume-once: a second chord before this fires would overwrite
@@ -72,22 +77,41 @@ export function DictateWindow() {
   sessionRef.current = session;
 
   useEffect(() => {
-    const unlistens: Promise<UnlistenFn>[] = [];
-    unlistens.push(
+    let disposed = false;
+    const unlistens: UnlistenFn[] = [];
+    const registrations = [
       listen<{ focus: FocusSnapshot | null }>('dictate:start', (event) => {
         focusRef.current = event.payload?.focus ?? null;
         sessionRef.current.startRecording();
       }),
-    );
-    unlistens.push(
       listen('dictate:stop', () => {
-        if (sessionRef.current.isRecording) sessionRef.current.stopRecording();
+        // Forward stops that arrive while getUserMedia is still resolving.
+        sessionRef.current.stopRecording();
       }),
-    );
+      listen<boolean>('dictate:warm', (event) => {
+        setMicWarm(Boolean(event.payload));
+      }),
+    ];
+    Promise.all(registrations)
+      .then((registered) => {
+        if (disposed) {
+          for (const unlisten of registered) unlisten();
+          return;
+        }
+        unlistens.push(...registered);
+        emit('dictate:warm-request').catch(() => {});
+      })
+      .catch((err) => console.warn('[dictate] event listener registration failed:', err));
     return () => {
-      for (const p of unlistens) p.then((fn) => fn()).catch(() => {});
+      disposed = true;
+      for (const unlisten of unlistens) unlisten();
     };
   }, []);
+
+  useEffect(() => {
+    if (micWarm) void session.prewarm();
+    else session.releaseWarm();
+  }, [micWarm, session.prewarm, session.releaseWarm]);
 
   // --- Agent-speak cycle ---------------------------------------------------
 
