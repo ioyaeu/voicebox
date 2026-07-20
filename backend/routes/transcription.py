@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 UPLOAD_CHUNK_SIZE = 1024 * 1024  # 1MB
-UPLOAD_AUDIO_EXTENSIONS = {".wav", ".mp3", ".flac", ".ogg", ".m4a", ".aac", ".webm"}
+UPLOAD_AUDIO_EXTENSIONS = {".wav", ".mp3", ".flac", ".ogg", ".m4a", ".aac", ".webm", ".opus"}
 
 
 def _upload_suffix(filename: str | None) -> str:
@@ -28,11 +28,6 @@ def _upload_suffix(filename: str | None) -> str:
 
 def _is_realtime_conflict(exc: RuntimeError) -> bool:
     return "real-time streaming is active" in str(exc)
-
-# Same set profiles.py accepts for voice samples. librosa picks its decoder from the
-# file extension, so the temp file has to keep the uploaded one.
-ALLOWED_AUDIO_EXTS = {".wav", ".mp3", ".m4a", ".ogg", ".flac", ".aac", ".webm", ".opus"}
-
 
 @router.post("/transcribe", response_model=models.TranscriptionResponse)
 async def transcribe_audio(
