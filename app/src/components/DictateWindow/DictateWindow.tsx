@@ -39,20 +39,13 @@ export function DictateWindow() {
   // user opted into keeping the microphone ready.
   const [micWarm, setMicWarm] = useState(false);
 
-  // Snapshot of the focused UI element at chord-start, shipped over from
-  // Rust on the ``dictate:start`` payload. Held in a ref so it survives
-  // the 1–2 s transcribe + refine window — the paste only fires once the
-  // final text comes back.
-  const focusRef = useRef<FocusSnapshot | null>(null);
-
   const session = useCaptureRecordingSession({
     keepMicWarm: micWarm,
-    onFinalText: async (text, _capture, allowAutoPaste) => {
-      const focus = focusRef.current;
-      // Consume-once: a second chord before this fires would overwrite
-      // focusRef, but nulling it here guards against the late-arriving
-      // refine-result firing a paste after the user has moved on.
-      focusRef.current = null;
+    onFinalText: async (text, _capture, allowAutoPaste, context) => {
+      // Focus is the snapshot taken at chord-start and threaded through as this
+      // take's context, so it survives the 1–2 s transcribe + refine window and
+      // overlapping dictations can't paste into each other's target.
+      const focus = context as FocusSnapshot | null;
       if (!allowAutoPaste) return;
       if (!focus || !text.trim()) return;
       try {
@@ -81,8 +74,7 @@ export function DictateWindow() {
     const unlistens: UnlistenFn[] = [];
     const registrations = [
       listen<{ focus: FocusSnapshot | null }>('dictate:start', (event) => {
-        focusRef.current = event.payload?.focus ?? null;
-        sessionRef.current.startRecording();
+        sessionRef.current.startRecording(event.payload?.focus ?? null);
       }),
       listen('dictate:stop', () => {
         // Forward stops that arrive while getUserMedia is still resolving.

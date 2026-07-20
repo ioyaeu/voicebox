@@ -4,7 +4,11 @@ import { convertToWav } from '@/lib/utils/audio';
 
 interface UseAudioRecordingOptions {
   maxDurationSeconds?: number;
-  onRecordingComplete?: (blob: Blob, duration?: number) => void;
+  // ``context`` is whatever was handed to ``startRecording`` for this take,
+  // threaded back untouched so callers can correlate the result with the
+  // recording it came from (the dictate window pairs it with the focus
+  // snapshot captured at chord-start).
+  onRecordingComplete?: (blob: Blob, duration?: number, context?: unknown) => void;
   /**
    * Keep the microphone ``MediaStream`` open between recordings instead of
    * tearing it down on every stop. This is what removes the "first words get
@@ -184,7 +188,7 @@ export function useAudioRecording({
   }, [keepWarm, acquireStream]);
 
   const startRecording = useCallback(
-    async () => {
+    async (context?: unknown) => {
       // A second chord can arrive while the first one is still waiting on
       // getUserMedia. Never create overlapping MediaRecorders on the same
       // coalesced stream; the original take will honor any deferred stop.
@@ -275,11 +279,11 @@ export function useAudioRecording({
           // Convert to WAV format to avoid needing ffmpeg on backend
           try {
             const wavBlob = await convertToWav(webmBlob);
-            onRecordingComplete?.(wavBlob, recordedDuration);
+            onRecordingComplete?.(wavBlob, recordedDuration, context);
           } catch (err) {
             console.error('Error converting audio to WAV:', err);
             // Fallback to original blob if conversion fails
-            onRecordingComplete?.(webmBlob, recordedDuration);
+            onRecordingComplete?.(webmBlob, recordedDuration, context);
           }
         };
 
