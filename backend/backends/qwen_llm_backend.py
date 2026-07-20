@@ -10,6 +10,7 @@ and STT engines.
 import asyncio
 import logging
 
+from ..services.mlx_thread import clear_mlx_cache, run_on_mlx_thread, run_on_mlx_thread_blocking
 from . import DEFAULT_LLM_MAX_TOKENS, DEFAULT_LLM_TEMPERATURE
 from .base import (
     empty_device_cache,
@@ -204,6 +205,7 @@ class MLXQwenLLMBackend:
         )
 
     def _ensure_loaded_sync(self, model_size: str | None = None) -> None:
+        """Load the model if the requested size isn't already resident."""
         if model_size is None:
             model_size = self.model_size
 
@@ -216,10 +218,14 @@ class MLXQwenLLMBackend:
         self._load_model_sync(model_size)
 
     async def load_model(self, model_size: str | None = None) -> None:
-        from .mlx_backend import _run_on_mlx_thread, ensure_realtime_stream_not_active
+        from .mlx_backend import ensure_realtime_stream_not_active
 
         ensure_realtime_stream_not_active("MLX Qwen3 model loading")
-        await _run_on_mlx_thread(self._ensure_loaded_sync, model_size)
+        await run_on_mlx_thread(self._ensure_loaded_sync, model_size)
+
+    async def unload(self) -> None:
+        """Free the model, serialized onto the MLX worker thread."""
+        await run_on_mlx_thread(self._unload_model_sync)
 
     def _load_model_sync(self, model_size: str) -> None:
         from mlx_lm import load as mlx_load
@@ -245,10 +251,7 @@ class MLXQwenLLMBackend:
     def unload_model(self) -> None:
         if self.model is None:
             return
-
-        from .mlx_backend import _run_on_mlx_thread_blocking
-
-        _run_on_mlx_thread_blocking(self._unload_model_sync)
+        run_on_mlx_thread_blocking(self._unload_model_sync)
 
     def _unload_model_sync(self) -> None:
         if self.model is None:
@@ -258,12 +261,7 @@ class MLXQwenLLMBackend:
         self.model = None
         self.tokenizer = None
         self._current_model_size = None
-        try:
-            import mlx.core as mx
-
-            mx.clear_cache()
-        except Exception:
-            pass
+        clear_mlx_cache()
         logger.info("Qwen3 (MLX) unloaded")
 
     async def generate(
@@ -275,7 +273,7 @@ class MLXQwenLLMBackend:
         model_size: str | None = None,
         examples: list[tuple[str, str]] | None = None,
     ) -> str:
-        from .mlx_backend import _run_on_mlx_thread, ensure_realtime_stream_not_active
+        from .mlx_backend import ensure_realtime_stream_not_active
 
         ensure_realtime_stream_not_active("MLX Qwen3 generation")
 
@@ -283,7 +281,9 @@ class MLXQwenLLMBackend:
             self._ensure_loaded_sync(model_size)
             return self._generate_sync(prompt, system, max_tokens, temperature, examples)
 
-        return await _run_on_mlx_thread(_load_and_generate)
+        # Load-if-needed and inference run as one job on the MLX worker so a
+        # concurrent unload or different-size load can't land between them.
+        return await run_on_mlx_thread(_load_and_generate)
 
     def _generate_sync(
         self,

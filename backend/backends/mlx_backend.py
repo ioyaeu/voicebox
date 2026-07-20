@@ -2,13 +2,7 @@
 MLX backend implementation for TTS and STT using mlx-audio.
 """
 
-import asyncio
-import contextvars
-import functools
 import logging
-import threading
-from collections.abc import Callable
-from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import numpy as np
@@ -20,6 +14,7 @@ from ..utils.hf_offline_patch import ensure_original_qwen_config_cached, patch_h
 patch_huggingface_hub_offline()
 ensure_original_qwen_config_cached()
 
+from ..services.mlx_thread import clear_mlx_cache, run_on_mlx_thread, run_on_mlx_thread_blocking  # noqa: E402
 from ..utils.audio import estimate_max_new_tokens  # noqa: E402
 from ..utils.cache import cache_voice_prompt, get_cache_key, get_cached_voice_prompt  # noqa: E402
 from . import LANGUAGE_CODE_TO_NAME, WHISPER_HF_REPOS  # noqa: E402
@@ -31,36 +26,9 @@ from .base import (  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
-# MLX streams are thread-local and mlx-audio caches one on the model at load
-# time, so model load and inference must run on the same OS thread.
-_mlx_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="mlx")
-_mlx_worker_state = threading.local()
-
-
-def _mark_mlx_worker[T](func: Callable[..., T], *args: object, **kwargs: object) -> T:
-    _mlx_worker_state.active = True
-    try:
-        return func(*args, **kwargs)
-    finally:
-        _mlx_worker_state.active = False
-
-
-async def _run_on_mlx_thread[T](func: Callable[..., T], *args: object, **kwargs: object) -> T:
-    """Run a blocking MLX call on the single dedicated MLX worker thread."""
-    loop = asyncio.get_running_loop()
-    ctx = contextvars.copy_context()
-    return await loop.run_in_executor(
-        _mlx_executor,
-        functools.partial(_mark_mlx_worker, ctx.run, func, *args, **kwargs),
-    )
-
-
-def _run_on_mlx_thread_blocking[T](func: Callable[..., T], *args: object, **kwargs: object) -> T:
-    """Synchronously run a blocking MLX call on the dedicated MLX worker."""
-    if getattr(_mlx_worker_state, "active", False):
-        return func(*args, **kwargs)
-    ctx = contextvars.copy_context()
-    return _mlx_executor.submit(_mark_mlx_worker, ctx.run, func, *args, **kwargs).result()
+# Backwards-compatible aliases for MLX side backends added in this fork.
+_run_on_mlx_thread = run_on_mlx_thread
+_run_on_mlx_thread_blocking = run_on_mlx_thread_blocking
 
 
 def ensure_realtime_stream_not_active(operation: str = "MLX inference") -> None:
@@ -76,8 +44,6 @@ def ensure_realtime_stream_not_active(operation: str = "MLX inference") -> None:
             f"{operation} is blocked while Voice Changer real-time streaming is active. "
             "Stop the live stream and try again."
         )
-
-
 class MLXTTSBackend:
     """MLX-based TTS backend using mlx-audio."""
 
@@ -123,6 +89,7 @@ class MLXTTSBackend:
         )
 
     def _ensure_loaded_sync(self, model_size: str | None = None) -> None:
+        """Load the model if the requested size isn't already resident."""
         if model_size is None:
             model_size = self.model_size
 
@@ -142,10 +109,14 @@ class MLXTTSBackend:
             model_size: Model size to load (1.7B or 0.6B)
         """
         ensure_realtime_stream_not_active("MLX TTS model loading")
-        await _run_on_mlx_thread(self._ensure_loaded_sync, model_size)
+        await run_on_mlx_thread(self._ensure_loaded_sync, model_size)
 
     # Alias for compatibility
     load_model = load_model_async
+
+    async def unload(self):
+        """Free the model, serialized onto the MLX worker thread."""
+        await run_on_mlx_thread(self._unload_model_sync)
 
     def _load_model_sync(self, model_size: str):
         """Synchronous model loading."""
@@ -189,7 +160,7 @@ class MLXTTSBackend:
             self.model = None
             self._current_model_size = None
             active_after_del = mx.get_active_memory() / 1e6
-            mx.clear_cache()
+            clear_mlx_cache()
             logger.info(
                 "MLX TTS model unloaded — Metal MB: active %.0f->%.0f (after clear %.0f), cache %.0f->%.0f, peak %.0f",
                 active_before,
@@ -350,11 +321,13 @@ class MLXTTSBackend:
 
             return audio, sample_rate
 
+        # Load-if-needed and inference run as one job on the MLX worker so a
+        # concurrent unload or different-size load can't land between them.
         def _load_and_generate():
             self._ensure_loaded_sync(None)
             return _generate_sync()
 
-        audio, sample_rate = await _run_on_mlx_thread(_load_and_generate)
+        audio, sample_rate = await run_on_mlx_thread(_load_and_generate)
 
         return audio, sample_rate
 
@@ -375,6 +348,7 @@ class MLXSTTBackend:
         return is_model_cached(hf_repo, weight_extensions=(".safetensors", ".bin", ".npz"))
 
     def _ensure_loaded_sync(self, model_size: str | None = None) -> None:
+        """Load the model if the requested size isn't already resident."""
         if model_size is None:
             model_size = self.model_size
 
@@ -394,10 +368,14 @@ class MLXSTTBackend:
             model_size: Model size (tiny, base, small, medium, large)
         """
         ensure_realtime_stream_not_active("MLX Whisper model loading")
-        await _run_on_mlx_thread(self._ensure_loaded_sync, model_size)
+        await run_on_mlx_thread(self._ensure_loaded_sync, model_size)
 
     # Alias for compatibility
     load_model = load_model_async
+
+    async def unload(self):
+        """Free the model, serialized onto the MLX worker thread."""
+        await run_on_mlx_thread(self._unload_model_sync)
 
     def _load_model_sync(self, model_size: str):
         """Synchronous model loading."""
@@ -421,11 +399,10 @@ class MLXSTTBackend:
     def _unload_model_sync(self):
         """Unload the model to free memory."""
         if self.model is not None:
-            import mlx.core as mx
 
             del self.model
             self.model = None
-            mx.clear_cache()
+            clear_mlx_cache()
             logger.info("MLX Whisper model unloaded")
 
     async def transcribe(
@@ -469,8 +446,10 @@ class MLXSTTBackend:
                 return result.text.strip()
             return str(result).strip()
 
+        # Load-if-needed and transcription run as one job on the MLX worker so
+        # a concurrent unload or load can't land between them.
         def _load_and_transcribe():
             self._ensure_loaded_sync(model_size)
             return _transcribe_sync()
 
-        return await _run_on_mlx_thread(_load_and_transcribe)
+        return await run_on_mlx_thread(_load_and_transcribe)

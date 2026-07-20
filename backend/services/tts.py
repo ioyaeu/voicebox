@@ -7,7 +7,7 @@ import io
 import numpy as np
 import soundfile as sf
 
-from ..backends import TTSBackend, get_tts_backend
+from ..backends import TTSBackend, get_tts_backend, unload_backend
 from ..utils.cache import clear_voice_prompt_memory_cache
 
 
@@ -21,11 +21,11 @@ def get_tts_model() -> TTSBackend:
     return get_tts_backend()
 
 
-def unload_tts_model():
-    """Unload TTS model to free memory."""
+async def unload_tts_model():
+    """Unload TTS model to free memory, serialized onto the MLX worker."""
     backend = get_tts_backend()
     was_loaded = backend.is_loaded()
-    backend.unload_model()
+    await unload_backend(backend)
     if was_loaded:
         clear_voice_prompt_memory_cache()
 
