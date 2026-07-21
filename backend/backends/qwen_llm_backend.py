@@ -10,7 +10,11 @@ and STT engines.
 import asyncio
 import logging
 
-from ..services.mlx_thread import clear_mlx_cache, run_on_mlx_thread, run_on_mlx_thread_blocking
+from ..services.mlx_thread import (
+    clear_mlx_cache,
+    run_on_mlx_thread,
+    run_on_mlx_thread_blocking,
+)
 from . import DEFAULT_LLM_MAX_TOKENS, DEFAULT_LLM_TEMPERATURE
 from .base import (
     empty_device_cache,
