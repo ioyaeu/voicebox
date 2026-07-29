@@ -93,14 +93,24 @@ jobs:
           # mlx-audio>=0.3.1 and mlx-lm>=0.31.1 both declare transformers>=5.x,
           # which conflicts with our 4.57.x cap. The runtime APIs we use work
           # fine on transformers 4.57.x in practice (verified in dev), so install
-          # them --no-deps. mlx-audio's other runtime deps (huggingface_hub,
-          # librosa, numpy, numba, pyloudnorm) are already in requirements.txt;
-          # miniaudio is in requirements-mlx.txt (needed by mlx_audio.stt,
-          # not transitively pulled by anything else — see issue #505); the
-          # rest (sounddevice, protobuf, sentencepiece, pyyaml, jinja2) are
-          # pulled in by other engines.
+          # them --no-deps. MLX-only runtime deps that are not guaranteed by
+          # requirements.txt (including Voxtral's mistral-common[audio] /
+          # sentencepiece path and mlx_audio's sounddevice/miniaudio deps) live
+          # in requirements-mlx.txt.
           pip install --no-deps mlx-lm==0.31.1
-          pip install --no-deps mlx-audio==0.4.1
+          pip install --no-deps mlx-audio==0.4.3
+
+      # macOS ships two libomp.dylib copies (torch's + faiss-cpu's); loading both
+      # aborts the process (dual-OpenMP segfault). Collapse faiss's onto torch's
+      # single image BEFORE PyInstaller packs the bundle. Runs after every pip
+      # install so faiss+torch are importable; the runtime hook
+      # (rth_faiss_libomp.py) is the belt-and-braces backstop at launch. Resolves
+      # the setup-python interpreter on PATH (no venv on the CI runner).
+      - name: Fix macOS dual-OpenMP (faiss/torch libomp)
+        if: matrix.platform == 'macos-latest' || matrix.platform == 'macos-15-intel'
+        run: |
+          chmod +x scripts/fix-macos-openmp.sh
+          ./scripts/fix-macos-openmp.sh
 
       - name: Build Python server (Linux/macOS)
         if: matrix.platform != 'windows-latest'

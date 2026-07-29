@@ -8,10 +8,14 @@ Usage:
 
 import PyInstaller.__main__
 import argparse
+import contextlib
 import logging
 import os
 import platform
+import shutil
 import sys
+import tempfile
+import warnings
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -20,6 +24,197 @@ logger = logging.getLogger(__name__)
 def is_apple_silicon():
     """Check if running on Apple Silicon."""
     return platform.system() == "Darwin" and platform.machine() == "arm64"
+
+
+@contextlib.contextmanager
+def quiet_optional_dependency_probe_noise():
+    """Keep PyInstaller analysis from printing optional-dependency warnings.
+
+    qwen_tts imports the Python ``sox`` package during analysis. That package
+    shells out to ``sox -h`` at import time, which prints `/bin/sh: sox: command
+    not found` when the system executable is absent. Runtime Qwen inference has
+    a numpy fallback in ``backend.utils.qwen_sox_shim``; this temporary PATH stub
+    is only to keep the build log readable.
+    """
+    old_path = os.environ.get("PATH", "")
+    old_pythonwarnings = os.environ.get("PYTHONWARNINGS")
+    warning_filter = "ignore:pkg_resources is deprecated as an API:UserWarning"
+    os.environ["PYTHONWARNINGS"] = (
+        f"{old_pythonwarnings},{warning_filter}" if old_pythonwarnings else warning_filter
+    )
+
+    with tempfile.TemporaryDirectory(prefix="voicebox-pyi-tools-") as tmp:
+        stub_path: Path | None = None
+        if shutil.which("sox") is None:
+            stub_path = Path(tmp) / ("sox.bat" if platform.system() == "Windows" else "sox")
+            if platform.system() == "Windows":
+                stub_path.write_text(
+                    "@echo off\necho AUDIO FILE FORMATS: wav mp3 flac ogg m4a webm\n",
+                    encoding="utf-8",
+                )
+            else:
+                stub_path.write_text(
+                    "#!/bin/sh\nprintf '%s\\n' 'AUDIO FILE FORMATS: wav mp3 flac ogg m4a webm'\n",
+                    encoding="utf-8",
+                )
+                stub_path.chmod(0o755)
+            os.environ["PATH"] = tmp + os.pathsep + old_path
+            logger.info("Using temporary SoX analysis stub for PyInstaller")
+
+        try:
+            warnings_cm = warnings.catch_warnings()
+            warnings_cm.__enter__()
+            warnings.filterwarnings(
+                "ignore",
+                message="pkg_resources is deprecated as an API.*",
+                category=UserWarning,
+            )
+            yield
+        finally:
+            warnings_cm.__exit__(None, None, None)
+            os.environ["PATH"] = old_path
+            if old_pythonwarnings is None:
+                os.environ.pop("PYTHONWARNINGS", None)
+            else:
+                os.environ["PYTHONWARNINGS"] = old_pythonwarnings
+
+
+# ---------------------------------------------------------------------------
+# macOS single-OpenMP (libomp) verification
+# ---------------------------------------------------------------------------
+# torch and faiss-cpu each vendor a libomp.dylib. Loading two distinct OpenMP
+# runtimes into one process aborts on macOS (the classic dual-OpenMP segfault).
+# The two runtime resolution paths inside an *extracted* bundle are:
+#
+#   * torch : libtorch_cpu.dylib -> @rpath/libomp.dylib (rpath=@loader_path)
+#             => torch/lib/libomp.dylib
+#   * faiss : _swigfaiss*.so     -> @loader_path/.dylibs/libomp.dylib
+#             => faiss/.dylibs/libomp.dylib
+#
+# Both MUST resolve to a single real image. PyInstaller's --onefile CArchive has
+# no symlink type code, so step 01's faiss->torch symlink is DEREFERENCED into a
+# full copy when packed; the invariant is therefore only established at RUNTIME,
+# after pyi_hooks/rth_faiss_libomp.py re-points faiss/.dylibs/libomp.dylib at
+# torch's copy (before torch/faiss import). Consequently this check is meaningful
+# against a tree where that hook has run: an extracted _MEIPASS of a launched
+# onefile binary, or a --onedir COLLECT tree.
+#
+# NOTE ON sklearn: scikit-learn (pulled in via librosa) ships its OWN, separate
+# libomp under sklearn/.dylibs/ (or scikit_learn.libs/). It is NOT loaded
+# alongside torch/faiss here, so a naive "one libomp in the whole bundle" check
+# is WRONG. We assert exactly one real libomp *on the torch+faiss resolution
+# path* and merely report any others (sklearn's) as allowed.
+
+# Relative paths (inside an extracted bundle) that participate in faiss/torch
+# OpenMP resolution. The top-level alias is optional (present on some layouts).
+_FAISS_TORCH_LIBOMP_RELPATHS = (
+    os.path.join("torch", "lib", "libomp.dylib"),
+    os.path.join("faiss", ".dylibs", "libomp.dylib"),
+    "libomp.dylib",
+)
+
+
+def _iter_libomp_files(root: "Path"):
+    """Yield (relpath, abspath) for every ``libomp*.dylib`` under ``root``."""
+    for p in root.rglob("libomp*.dylib"):
+        try:
+            rel = str(p.relative_to(root))
+        except ValueError:
+            rel = str(p)
+        yield rel, p
+
+
+def verify_single_libomp(root) -> bool:
+    """Assert the faiss+torch OpenMP resolution path collapses to ONE real image.
+
+    ``root`` is an extracted bundle tree — a --onedir COLLECT dir or the runtime
+    ``_MEIPASS`` of a launched --onefile binary (i.e. AFTER rth_faiss_libomp.py
+    has run). Raises ``SystemExit`` (non-zero) if the invariant is violated so it
+    can gate a build/CI step; returns ``True`` on success.
+
+    Asserts:
+      * ``torch/lib/libomp.dylib`` exists (torch's canonical real image);
+      * every present faiss/torch resolution-path libomp resolves (realpath) to
+        that same single file — i.e. faiss's is a symlink to torch's (or absent),
+        and any top-level alias points there too.
+    Reports (but allows) sklearn's separate libomp.
+    """
+    root = Path(root)
+    if not root.exists():
+        raise SystemExit(f"single-libomp check FAILED: bundle root does not exist: {root}")
+
+    present = []
+    for rel in _FAISS_TORCH_LIBOMP_RELPATHS:
+        p = root / rel
+        if p.is_symlink() or p.exists():
+            present.append((rel, p))
+
+    torch_omp = root / "torch" / "lib" / "libomp.dylib"
+    if not torch_omp.exists():
+        raise SystemExit(
+            f"single-libomp check FAILED: torch/lib/libomp.dylib missing under {root}"
+        )
+
+    path_rels = {os.path.normpath(rel) for rel in _FAISS_TORCH_LIBOMP_RELPATHS}
+    others = [
+        (rel, p) for rel, p in _iter_libomp_files(root) if os.path.normpath(rel) not in path_rels
+    ]
+
+    real_targets = {os.path.realpath(p) for _, p in present}
+    canonical = os.path.realpath(torch_omp)
+
+    print("single-libomp check: bundle =", root)
+    for rel, p in present:
+        kind = "symlink->" + os.path.relpath(os.path.realpath(p), root) if p.is_symlink() else "real"
+        print(f"  faiss/torch path : {rel:<34} [{kind}]")
+    for rel, p in others:
+        print(f"  other (allowed)  : {rel:<34} [sklearn/etc — separate image]")
+
+    if len(real_targets) != 1 or canonical not in real_targets:
+        raise SystemExit(
+            "single-libomp check FAILED: faiss+torch resolution path has "
+            f"{len(real_targets)} distinct real libomp image(s): "
+            + ", ".join(sorted(real_targets))
+            + f"; expected exactly 1 == {canonical}. "
+            "faiss/.dylibs/libomp.dylib must be a symlink to torch/lib/libomp.dylib "
+            "(rth_faiss_libomp.py enforces this at runtime)."
+        )
+
+    print(
+        f"single-libomp check PASSED: 1 real libomp on faiss+torch path ({canonical}); "
+        f"{len(others)} separate (allowed) copy/ies."
+    )
+    return True
+
+
+def _report_onefile_libomp(binary_path: "Path") -> None:
+    """Best-effort: list the libomp entries packed into a --onefile binary.
+
+    Cannot assert single-image here — onefile dereferences step 01's symlink, so
+    both torch's and faiss's libomp are packed as real copies and are only
+    collapsed at runtime by rth_faiss_libomp.py. This is purely informational
+    plus a hand-off pointer to the authoritative runtime check.
+    """
+    try:
+        from PyInstaller.archive.readers import CArchiveReader
+
+        reader = CArchiveReader(str(binary_path))
+        toc = getattr(reader, "toc", None)
+        if toc is None:
+            toc, _opts = reader._parse_toc(reader.raw_pkg_data()[1])  # pragma: no cover
+        names = [n for n in toc if "libomp" in n.lower()]
+        print(f"single-libomp report: {binary_path.name} packs {len(names)} libomp entr(ies):")
+        for n in sorted(names):
+            print(f"    {n} [typecode {toc[n][-1]!r}]")
+    except Exception as exc:  # noqa: BLE001 - report only, never fail the build
+        print(f"single-libomp report: could not introspect {binary_path} ({exc!r})")
+    print(
+        "single-libomp: onefile packs BOTH torch's and faiss's copies (symlinks are "
+        "dereferenced by the CArchive); rth_faiss_libomp.py collapses them to a single "
+        "image at startup. Confirm the runtime invariant by launching the binary and "
+        "running:\n"
+        "    python build_binary.py --check-libomp <extracted _MEIPASS>"
+    )
 
 
 def build_server(cuda=False, rocm=False):
@@ -70,6 +265,13 @@ def build_server(cuda=False, rocm=False):
     # generated .spec, breaking reproducible builds on other machines / CI.
     args.extend(
         [
+            # macOS dual-OpenMP: torch and faiss-cpu each ship a libomp.dylib.
+            # PyInstaller 6.20 preserves step 01's faiss->torch symlink, but this
+            # hook guarantees faiss resolves to torch's single libomp image even
+            # when built from an un-fixed venv. See pyi_hooks/rth_faiss_libomp.py.
+            # No-op on non-macOS and when faiss already links to torch's copy.
+            "--runtime-hook",
+            "pyi_hooks/rth_faiss_libomp.py",
             "--runtime-hook",
             "pyi_rth_numpy_compat.py",
             # Stub torch.compiler.disable before transformers imports
@@ -128,6 +330,8 @@ def build_server(cuda=False, rocm=False):
             "backend.utils.progress",
             "--hidden-import",
             "backend.utils.hf_progress",
+            "--hidden-import",
+            "backend.utils.qwen_sox_shim",
             "--hidden-import",
             "backend.services.cuda",
             "--hidden-import",
@@ -215,18 +419,22 @@ def build_server(cuda=False, rocm=False):
             # modeling_qwen3_tts.py — needs physical .py source files bundled
             "--collect-all",
             "qwen_tts",
-            # Fix for pkg_resources and jaraco namespace packages
-            "--hidden-import",
-            "pkg_resources.extern",
+            # Fix for jaraco namespace packages
             "--collect-submodules",
             "jaraco",
             # inflect uses typeguard @typechecked which calls inspect.getsource()
             # at import time — needs .py source files, not just .pyc bytecode
             "--collect-all",
             "inflect",
-            # perth ships pretrained watermark model files (hparams.yaml, .pth.tar)
-            # in perth/perth_net/pretrained/ — needed by chatterbox at runtime
-            "--collect-all",
+            # perth ships pretrained watermark model files (hparams.yaml,
+            # .pth.tar) in perth/perth_net/pretrained/ — needed by chatterbox
+            # at runtime. Do not collect-all: perth.cli imports matplotlib,
+            # which Voicebox does not need and does not install.
+            "--hidden-import",
+            "perth",
+            "--collect-submodules",
+            "perth.perth_net",
+            "--collect-data",
             "perth",
             # piper_phonemize ships espeak-ng-data/ (phoneme tables, language dicts)
             # needed by LuxTTS for text-to-phoneme conversion
@@ -266,8 +474,11 @@ def build_server(cuda=False, rocm=False):
             "backend.utils.dac_shim",
             "--hidden-import",
             "torchaudio",
-            "--collect-submodules",
-            "tada",
+            # Do not collect-submodules tada wholesale: PyInstaller imports
+            # tada.modules in an isolated analyser before our DAC shim is
+            # installed, which raises "No module named 'dac'". The runtime
+            # Hume backend installs backend.utils.dac_shim before importing
+            # the explicit TADA modules listed above.
             # Kokoro 82M — lightweight TTS engine using misaki G2P
             # collect-all is required because transformers introspects .py source
             # files at runtime (e.g. _can_set_attn_implementation opens the class
@@ -327,6 +538,54 @@ def build_server(cuda=False, rocm=False):
             "mcp",
             "--hidden-import",
             "sse_starlette",
+            # RVC voice conversion (Phase A). The vendored engine is reached only
+            # via function-local imports (services/convert.py, services/profiles.py,
+            # routes/profiles.py), so list its modules explicitly rather than
+            # relying on modulegraph to walk into the frozen backend package.
+            "--hidden-import",
+            "backend.services.convert",
+            "--hidden-import",
+            "backend.backends.rvc",
+            "--hidden-import",
+            "backend.backends.rvc.pipeline",
+            "--hidden-import",
+            "backend.backends.rvc.checkpoint",
+            "--hidden-import",
+            "backend.backends.rvc.features",
+            "--hidden-import",
+            "backend.backends.rvc.pitch",
+            "--hidden-import",
+            "backend.backends.rvc.synthesizer",
+            # rvc.streaming: reached only via routes/convert.py's function-local
+            # import on the first WS handshake, so modulegraph never sees it.
+            "--hidden-import",
+            "backend.backends.rvc.streaming",
+            # faiss-cpu: native libfaiss.dylib + _swigfaiss extension and the
+            # dynamically-imported swigfaiss_* variants are collected by
+            # pyi_hooks/hook-faiss.py; libomp dedup by rth_faiss_libomp.py.
+            "--hidden-import",
+            "faiss",
+            # pyworld: single compiled extension. Its __init__ reads its own dist
+            # metadata via pkg_resources.get_distribution() at import time, so the
+            # metadata must be bundled or `import pyworld` raises DistributionNotFound.
+            "--hidden-import",
+            "pyworld",
+            "--hidden-import",
+            "pyworld.pyworld",
+            "--copy-metadata",
+            "pyworld",
+            # torchcrepe: the optional 'crepe' f0 estimator. Collect the package
+            # CODE only via --collect-submodules; its assets/{full,tiny}.pth
+            # (~87 MB) are deliberately NOT bundled (no --collect-data). Upstream
+            # torchcrepe has no download fallback of its own, so instead crepe-full
+            # is registered in the ModelConfig registry and fetched on demand
+            # (commit-pinned GitHub source + sha256), the same way contentvec/rmvpe
+            # are. Until it's downloaded, f0_method=crepe returns a clear 400 rather
+            # than crashing; rmvpe (the default) needs none of this and is unaffected.
+            "--hidden-import",
+            "torchcrepe",
+            "--collect-submodules",
+            "torchcrepe",
         ]
     )
 
@@ -427,6 +686,8 @@ def build_server(cuda=False, rocm=False):
                 "--hidden-import",
                 "backend.backends.mlx_backend",
                 "--hidden-import",
+                "backend.backends.voxtral_backend",
+                "--hidden-import",
                 "mlx",
                 "--hidden-import",
                 "mlx.core",
@@ -437,9 +698,21 @@ def build_server(cuda=False, rocm=False):
                 "--hidden-import",
                 "mlx_audio.tts",
                 "--hidden-import",
+                "mlx_audio.tts.models.voxtral_tts",
+                "--hidden-import",
                 "mlx_audio.stt",
                 "--hidden-import",
                 "mlx_lm",
+                "--hidden-import",
+                "mistral_common.tokens.tokenizers.mistral",
+                "--hidden-import",
+                "mistral_common.protocol.speech.request",
+                "--hidden-import",
+                "sentencepiece",
+                "--hidden-import",
+                "sounddevice",
+                "--hidden-import",
+                "tiktoken",
                 "--hidden-import",
                 "backend.backends.qwen_llm_backend",
                 "--collect-submodules",
@@ -462,6 +735,25 @@ def build_server(cuda=False, rocm=False):
                 # which --hidden-import alone can't resolve.
                 "--collect-all",
                 "mlx_lm",
+                # Voxtral TTS uses Mistral's Tekken tokenizer helpers.
+                # mistral_common reads package metadata and ships tokenizer data;
+                # sentencepiece/tiktoken/sounddevice carry native/data files.
+                "--collect-all",
+                "mistral_common",
+                "--collect-all",
+                "sentencepiece",
+                "--collect-all",
+                "sounddevice",
+                "--collect-all",
+                "tiktoken",
+                "--copy-metadata",
+                "mistral-common",
+                "--copy-metadata",
+                "sentencepiece",
+                "--copy-metadata",
+                "sounddevice",
+                "--copy-metadata",
+                "tiktoken",
             ]
         )
     elif not cuda and not rocm:
@@ -603,7 +895,8 @@ def build_server(cuda=False, rocm=False):
                 )
 
         # Run PyInstaller
-        PyInstaller.__main__.run(args)
+        with quiet_optional_dependency_probe_noise():
+            PyInstaller.__main__.run(args)
     finally:
         # Restore torch if we swapped it out (even on build failure)
         if restore_torch == "cuda":
@@ -670,6 +963,24 @@ def build_server(cuda=False, rocm=False):
 
 
     logger.info("Binary built in %s", backend_dir / "dist" / binary_name)
+
+    # macOS single-OpenMP post-build check. libomp is macOS-only; a naive count
+    # would trip over sklearn's separate copy, so we verify only the faiss+torch
+    # resolution path (see verify_single_libomp / _report_onefile_libomp).
+    if platform.system() == "Darwin":
+        try:
+            out = backend_dir / "dist" / binary_name
+            if out.is_dir():
+                # --onedir: the COLLECT tree is on disk; assert the invariant now.
+                inner = out / "_internal" if (out / "_internal").is_dir() else out
+                verify_single_libomp(inner)
+            elif out.is_file():
+                # --onefile: real invariant is established at runtime by the hook.
+                _report_onefile_libomp(out)
+        except SystemExit:
+            raise
+        except Exception as exc:  # noqa: BLE001 - never let the report crash a good build
+            logger.warning("single-libomp post-build check skipped: %r", exc)
 
 
 def build_shim():
@@ -779,9 +1090,21 @@ if __name__ == "__main__":
         action="store_true",
         help="Build the voicebox-mcp stdio shim binary instead of the server",
     )
+    parser.add_argument(
+        "--check-libomp",
+        metavar="BUNDLE_DIR",
+        default=None,
+        help=(
+            "Do not build. Assert the faiss+torch OpenMP resolution path in an "
+            "extracted bundle tree (a --onedir dir, or the runtime _MEIPASS of a "
+            "launched --onefile binary) collapses to a single real libomp image. "
+            "sklearn's separate copy is reported but allowed."
+        ),
+    )
     cli_args = parser.parse_args()
-    if cli_args.shim:
+    if cli_args.check_libomp:
+        verify_single_libomp(cli_args.check_libomp)
+    elif cli_args.shim:
         build_shim()
     else:
         build_server(cuda=cli_args.cuda, rocm=cli_args.rocm)
-

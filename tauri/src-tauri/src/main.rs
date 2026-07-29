@@ -1146,18 +1146,16 @@ fn update_chord_bindings(
 /// the user can grant the permission. The URL scheme is stable across
 /// macOS 10.14–15; no-op on other platforms.
 #[command]
-fn open_accessibility_settings(app: tauri::AppHandle) -> Result<(), String> {
+fn open_accessibility_settings(_app: tauri::AppHandle) -> Result<(), String> {
     #[cfg(target_os = "macos")]
     {
         let url = "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility";
-        app.shell()
-            .open(url, None)
+        open::that_detached(url)
             .map_err(|e| format!("Failed to open Accessibility settings: {e}"))?;
         Ok(())
     }
     #[cfg(not(target_os = "macos"))]
     {
-        let _ = app;
         Err("Accessibility settings pane is only implemented on macOS".into())
     }
 }
@@ -1166,18 +1164,16 @@ fn open_accessibility_settings(app: tauri::AppHandle) -> Result<(), String> {
 /// Used by the Captures settings UI when the toggle is on but the grant
 /// is missing, so the user can flip the system toggle without hunting.
 #[command]
-fn open_input_monitoring_settings(app: tauri::AppHandle) -> Result<(), String> {
+fn open_input_monitoring_settings(_app: tauri::AppHandle) -> Result<(), String> {
     #[cfg(target_os = "macos")]
     {
         let url = "x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent";
-        app.shell()
-            .open(url, None)
+        open::that_detached(url)
             .map_err(|e| format!("Failed to open Input Monitoring settings: {e}"))?;
         Ok(())
     }
     #[cfg(not(target_os = "macos"))]
     {
-        let _ = app;
         Err("Input Monitoring settings pane is only implemented on macOS".into())
     }
 }

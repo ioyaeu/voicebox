@@ -72,15 +72,18 @@ setup-python:
     if [ "$(uname -m)" = "arm64" ] && [ "$(uname)" = "Darwin" ]; then
         echo "Detected Apple Silicon — installing MLX dependencies..."
         {{ pip }} install -r {{ backend_dir }}/requirements-mlx.txt
-        # mlx-lm and mlx-audio declare transformers>=5.x, which conflicts with
-        # our transformers<=4.57.x cap, so install them --no-deps (their other
-        # runtime deps are covered by requirements.txt / requirements-mlx.txt —
-        # see the note in requirements-mlx.txt and .github/workflows/release.yml)
+        # mlx-audio / mlx-lm declare transformers>=5.x, which conflicts with the
+        # transformers<=4.57.6 cap in requirements.txt. The runtime APIs Voicebox
+        # uses work on transformers 4.57.x, so install them --no-deps. Mirrors the
+        # release workflow; without this a fresh Apple Silicon `just setup` can
+        # end up without mlx_audio / mlx_lm even though MLX support is selected.
         {{ pip }} install --no-deps mlx-lm==0.31.1
-        {{ pip }} install --no-deps mlx-audio==0.4.1
+        {{ pip }} install --no-deps mlx-audio==0.4.3
     fi
     {{ pip }} install git+https://github.com/QwenLM/Qwen3-TTS.git
     {{ pip }} install pyinstaller ruff pytest pytest-asyncio -q
+    # macOS: collapse faiss/torch dual-OpenMP into a single libomp (prevents SIGSEGV under load). No-op elsewhere.
+    ./scripts/fix-macos-openmp.sh
     echo "Python environment ready."
 
 [windows]
