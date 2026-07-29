@@ -12,13 +12,14 @@ from pathlib import Path
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
-# Add parent directory to path to import backend modules
-import sys
-sys.path.insert(0, str(Path(__file__).parent.parent))
-
-from database import Base, VoiceProfile as DBVoiceProfile
-from models import VoiceProfileCreate
-from profiles import create_profile, update_profile
+# Import via the ``backend`` package (repo root is on sys.path under pytest,
+# and both ``backend`` and ``backend.tests`` are packages). Importing the
+# top-level ``database``/``models``/``profiles`` names instead breaks the
+# package's own ``from ..utils...`` relative imports ("relative import beyond
+# top-level package"), which is what previously blocked collection.
+from backend.database import Base, VoiceProfile as DBVoiceProfile
+from backend.models import VoiceProfileCreate
+from backend.services.profiles import create_profile, update_profile
 
 
 @pytest.fixture

@@ -1,0 +1,216 @@
+---
+title: "Voice Changer (RVC)"
+description: "Convert an existing recording into one of your voices with RVC voice-to-voice conversion"
+---
+
+## Overview
+
+The **Voice Changer** takes a recording of one person speaking and re-voices it as
+another — same words, same timing, same performance, different voice. This is
+**voice-to-voice conversion** (RVC, *Retrieval-based Voice Conversion*), and it's a
+different modality from the TTS engines: there's no text involved. You bring the
+audio, pick a target voice, and Voicebox rewrites its timbre.
+
+<Callout type="info">
+  RVC converts audio you already have. If you want to *type* text and hear it in a
+  voice, that's TTS — see [Voice Cloning](/overview/voice-cloning) and
+  [Preset Voices](/overview/preset-voices).
+</Callout>
+
+Unlike the cloning engines, RVC voices aren't trained from a reference sample inside
+Voicebox. You supply a pre-trained **RVC model** (a community `.pth` checkpoint) that
+already encodes the target voice, and Voicebox runs the conversion locally.
+
+## What You Need
+
+<Cards>
+  <Card title="An RVC model (.pth)">
+    A community-trained checkpoint for the target voice — v1 or v2, any of the common
+    sample rates. This is the voice you convert *into*.
+  </Card>
+  <Card title="An optional index (.index)">
+    A FAISS feature index paired with the model. Optional — it sharpens timbre by
+    retrieving features from the training set. Conversion works fine without one.
+  </Card>
+  <Card title="Two shared backbones">
+    **ContentVec** (extracts what was said) and **RMVPE** (tracks pitch). Downloaded
+    once from the Models tab and reused by every RVC voice.
+  </Card>
+</Cards>
+
+ContentVec and RMVPE appear in **Settings → Models** as *ContentVec (Voice Conversion
+features)* and *RMVPE (Voice Conversion pitch)*. They download through the same flow as
+the TTS models. The per-voice `.pth`/`.index` files are uploaded on the voice profile
+itself, not through the Models tab.
+
+## Model Compatibility
+
+Voicebox loads standard community RVC checkpoints — the kind the RVC WebUI ecosystem
+produces and shares.
+
+| Property        | Supported                                                    |
+| --------------- | ------------------------------------------------------------ |
+| Format          | **v1 and v2** RVC checkpoints                                |
+| Sample rates    | 32 kHz, 40 kHz, 48 kHz                                       |
+| Pitch           | Both **f0** (pitch-guided) and non-f0 models                 |
+| Feature index   | Optional `.index` (FAISS) — picked up automatically if uploaded |
+| Checkpoint kind | **Extracted inference** checkpoints                          |
+
+<Callout type="warn">
+  Only *extracted inference* checkpoints work — the compact `.pth` an RVC training run
+  exports for inference. Raw training generators (e.g. `f0G40k.pth`, whose top-level
+  keys are `model`/`iteration`/…) are rejected before conversion. If a model was shared
+  as a full training checkpoint, run it through the RVC WebUI's ckpt export first.
+</Callout>
+
+## Where to Get Models
+
+RVC models are widely shared by the community. Common sources:
+
+- **Hugging Face Hub** — search for *RVC* or a specific voice; many repos ship the
+  `.pth` and matching `.index` together.
+- **RVC community model hubs** (e.g. voice-models.com, weights.gg) — large catalogs of
+  character and celebrity voices.
+
+<Callout type="warn">
+  A `.pth` file is a serialized model, so only load checkpoints from sources you trust —
+  the same caution you'd apply to any downloaded executable. Voicebox hardens this on its
+  side (see [Security](#security) below), but the safest habit is to stick to reputable
+  repos.
+</Callout>
+
+## Converting a Recording
+
+<Steps>
+  <Step title="Create an RVC voice profile">
+    In **Voices → New Profile**, choose the **RVC** voice type. RVC profiles don't take a
+    recorded sample, a preset voice, or a personality — just the model files.
+  </Step>
+  <Step title="Upload the model">
+    Upload the voice's `.pth` file (and its `.index`, if you have one). Voicebox validates
+    the checkpoint and reads its version, sample rate, and pitch mode.
+  </Step>
+  <Step title="Open the Voice Changer tab">
+    Pick your RVC voice as the **target voice** and drop in a **source audio** file — WAV,
+    MP3, FLAC, M4A, and other common formats all work.
+  </Step>
+  <Step title="Tune the conversion settings">
+    Leave the defaults for a first pass, then adjust pitch and the advanced knobs below.
+  </Step>
+  <Step title="Convert">
+    The job runs on the local generation queue. When it finishes, the converted audio lands
+    in your history alongside your TTS generations.
+  </Step>
+</Steps>
+
+### Conversion Settings
+
+| Setting                   | What it does                                                                 |
+| ------------------------- | --------------------------------------------------------------------------- |
+| **Pitch shift**           | Transpose in semitones. Try `+12` for male → female, `-12` for female → male. |
+| **Pitch estimator**       | **RMVPE** (recommended — fast and robust) or **CREPE** (smoother on clean vocals). |
+| **Index rate**            | How strongly the feature index shapes the timbre. No effect if the voice has no `.index`. |
+| **Volume envelope**       | `0` keeps the source loudness, `1` mimics the target voice's loudness.       |
+| **Consonant protection**  | Higher values protect breaths and consonants from artifacts.                |
+
+## Security
+
+Uploaded models are treated as untrusted input:
+
+- **Weights-only loading** — checkpoints are read with `torch.load(..., weights_only=True)`,
+  so a malicious pickle can't execute code on load.
+- **Structure validation** — the file must be a well-formed extracted RVC checkpoint before
+  it's accepted; anything else is rejected and nothing is written to disk.
+- **Size limits** — models are capped at 500 MB and index files at 200 MB; oversized uploads
+  are cut off mid-stream.
+
+## Performance: CPU vs GPU
+
+Voice conversion runs on the same accelerator as the rest of Voicebox (see
+[GPU Acceleration](/overview/gpu-acceleration)):
+
+- **GPU (CUDA / Apple Silicon)** — fastest; a short clip converts in a few seconds.
+- **CPU** — fully supported, no GPU required, but noticeably slower on longer clips.
+
+Because file conversion is offline, CPU is perfectly usable — you're not racing latency the
+way real-time mode does. The heavier costs are the one-time ContentVec/RMVPE downloads and
+the pitch-estimation pass over the audio.
+
+## macOS Setup Note
+
+RVC pulls in a couple of native dependencies. On macOS this is handled for you by
+`just setup`, but two details are worth knowing:
+
+- **Compiler for `pyworld`** — one dependency builds from source and needs a C++ toolchain.
+  Install the Xcode Command Line Tools once with `xcode-select --install` (this is the same
+  requirement noted in [Development Setup](/developer/setup)).
+- **Single OpenMP runtime** — `faiss` and PyTorch each ship their own `libomp`, and loading
+  both in one process would crash. The backend setup script fixes this automatically, and the
+  packaged app bundles a single shared `libomp` — no action needed on your part.
+
+## Real-Time Mode
+
+Alongside file conversion, the Voice Changer tab has a **Real-time** mode: it converts your
+microphone live and plays the re-voiced audio out a device you choose. Switch between **File**
+and **Real-time** with the toggle at the top of the tab.
+
+<Steps>
+  <Step title="Pick the target voice">
+    Choose the RVC voice to convert *into* — the same RVC profiles you use for file conversion.
+  </Step>
+  <Step title="Choose your devices">
+    Select the microphone to capture and the output to play the converted voice through. On
+    platforms that support output routing you can send it to a **virtual audio device**
+    (BlackHole on macOS, VB-Cable on Windows) so the result feeds Discord, games, and calls.
+    Voicebox detects whether a virtual device is installed and shows a setup card with guidance
+    when one isn't — it does not install the driver for you.
+  </Step>
+  <Step title="Monitor (optional)">
+    Flip on **Monitor yourself** to hear the converted output in your own headphones. Use
+    headphones — monitoring through speakers feeds the mic and echoes.
+  </Step>
+  <Step title="Set the conversion parameters">
+    The same pitch, estimator, index-rate, volume-envelope, and consonant-protection knobs from
+    file mode apply live.
+  </Step>
+  <Step title="Start converting">
+    Hit start and speak. Live **input** and **output** meters show audio flowing, and a
+    **latency gauge** reports the mouth-to-ear delay — it turns amber if latency climbs past the
+    real-time budget or the machine can't keep pace.
+  </Step>
+</Steps>
+
+<Callout type="info">
+  Real-time conversion is the most demanding mode. A GPU keeps latency comfortable; on slower
+  CPUs the gauge will warn you as it climbs. File mode has no such constraint.
+</Callout>
+
+## Limitations
+
+<Callout type="warn">
+  Convert only voices you have the right to use. Re-voicing someone's speech raises the same
+  consent and likeness concerns as cloning — see the project's
+  [SECURITY.md](https://github.com/jamiepine/voicebox/blob/main/SECURITY.md) and your local
+  laws on synthetic voice content.
+</Callout>
+
+- Output quality follows the model — a poorly trained checkpoint produces a poor conversion.
+- Noisy or music-laden source audio degrades the result; clean vocals convert best.
+- The converted audio inherits the source's timing and delivery — RVC changes *who* is
+  speaking, not *what* is said or *how* it's paced.
+- Real-time conversion is the most hardware-hungry path — on slower machines latency climbs and
+  the tab warns you; a GPU keeps it comfortable (see [Real-Time Mode](#real-time-mode) above).
+
+## Next Steps
+
+<Cards>
+  <Card title="Voice Cloning" href="/overview/voice-cloning">
+    Clone a specific voice from a reference sample for TTS
+  </Card>
+  <Card title="Preset Voices" href="/overview/preset-voices">
+    Use built-in voices without recording or uploading
+  </Card>
+  <Card title="GPU Acceleration" href="/overview/gpu-acceleration">
+    Make conversion faster with your GPU
+  </Card>
+</Cards>
