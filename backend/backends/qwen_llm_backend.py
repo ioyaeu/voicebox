@@ -215,7 +215,10 @@ class MLXQwenLLMBackend:
         if self.model is not None and self._current_model_size != model_size:
             self.unload_model()
 
-        await asyncio.to_thread(self._load_model_sync, model_size)
+        from .mlx_backend import _run_on_mlx_thread, ensure_realtime_stream_not_active
+
+        ensure_realtime_stream_not_active("MLX Qwen3 model loading")
+        await _run_on_mlx_thread(self._load_model_sync, model_size)
 
     def _load_model_sync(self, model_size: str) -> None:
         from mlx_lm import load as mlx_load
@@ -241,6 +244,14 @@ class MLXQwenLLMBackend:
     def unload_model(self) -> None:
         if self.model is None:
             return
+
+        from .mlx_backend import _run_on_mlx_thread_blocking
+
+        _run_on_mlx_thread_blocking(self._unload_model_sync)
+
+    def _unload_model_sync(self) -> None:
+        if self.model is None:
+            return
         del self.model
         del self.tokenizer
         self.model = None
@@ -258,7 +269,10 @@ class MLXQwenLLMBackend:
         examples: Optional[list[tuple[str, str]]] = None,
     ) -> str:
         await self.load_model(model_size)
-        return await asyncio.to_thread(
+        from .mlx_backend import _run_on_mlx_thread, ensure_realtime_stream_not_active
+
+        ensure_realtime_stream_not_active("MLX Qwen3 generation")
+        return await _run_on_mlx_thread(
             self._generate_sync, prompt, system, max_tokens, temperature, examples
         )
 

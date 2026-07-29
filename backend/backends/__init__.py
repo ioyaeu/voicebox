@@ -52,13 +52,20 @@ class ModelConfig:
     model_name: str  # e.g. "luxtts", "chatterbox-tts"
     display_name: str  # e.g. "LuxTTS (Fast, CPU-friendly)"
     engine: str  # e.g. "luxtts", "chatterbox"
-    hf_repo_id: str  # e.g. "YatharthS/LuxTTS"
+    hf_repo_id: str = ""  # HF repo; empty for direct-download models (see below)
     model_size: str = "default"
     size_mb: int = 0
     needs_trim: bool = False
     retries_runaway: bool = False
     supports_instruct: bool = False
     languages: list[str] = field(default_factory=lambda: ["en"])
+    # Non-HF source. When ``download_url`` is set the model is fetched directly
+    # (streamed + sha256-verified) instead of via the HF Hub — used for weights
+    # that live at a commit-pinned GitHub URL rather than a HuggingFace repo.
+    # ``file_name`` is the on-disk name under the model cache root.
+    download_url: Optional[str] = None
+    sha256: Optional[str] = None
+    file_name: Optional[str] = None
 
 
 @runtime_checkable
@@ -216,6 +223,7 @@ TTS_ENGINES = {
     "chatterbox_turbo": "Chatterbox Turbo",
     "tada": "TADA",
     "kokoro": "Kokoro",
+    "voxtral": "Voxtral 4B TTS",
 }
 
 LLM_ENGINES = {
@@ -371,6 +379,14 @@ def _get_non_qwen_tts_configs() -> list[ModelConfig]:
             size_mb=350,
             languages=["en", "es", "fr", "hi", "it", "pt", "ja", "zh"],
         ),
+        ModelConfig(
+            model_name="voxtral-4b-tts-4bit",
+            display_name="Voxtral 4B TTS (MLX 4-bit)",
+            engine="voxtral",
+            hf_repo_id="mlx-community/Voxtral-4B-TTS-2603-mlx-4bit",
+            size_mb=2500,
+            languages=["en", "fr", "es", "de", "it", "pt", "nl", "ar", "hi"],
+        ),
     ]
 
 
@@ -466,14 +482,56 @@ def _get_qwen_llm_configs() -> list[ModelConfig]:
     ]
 
 
+def _get_rvc_model_configs() -> list[ModelConfig]:
+    """Return the RVC system models (feature extractor + pitch estimator).
+
+    These are shared backbones for voice conversion, not per-voice weights.
+    ContentVec loads via ``HubertModel.from_pretrained`` (transformers format);
+    RMVPE is a single ``rmvpe.pt`` file inside a larger repo, so its cache check
+    uses ``is_model_cached(required_files=["rmvpe.pt"])`` at the call site.
+    """
+    return [
+        ModelConfig(
+            model_name="contentvec",
+            display_name="ContentVec (Voice Conversion features)",
+            engine="rvc",
+            hf_repo_id="lengyue233/content-vec-best",
+            size_mb=360,
+        ),
+        ModelConfig(
+            model_name="rmvpe",
+            display_name="RMVPE (Voice Conversion pitch)",
+            engine="rvc",
+            hf_repo_id="lj1995/VoiceConversionWebUI",
+            size_mb=180,
+        ),
+        # torchcrepe's full.pth is not on the HF Hub and is deliberately excluded
+        # from the frozen binary (torchcrepe has no download fallback), so it is a
+        # direct-download registry model: commit-pinned GitHub source + sha256.
+        ModelConfig(
+            model_name="crepe-full",
+            display_name="Crepe (pitch, full)",
+            engine="rvc",
+            download_url=(
+                "https://raw.githubusercontent.com/maxrmorrison/torchcrepe/"
+                "19e2ec3d494c0797a5ff2a11408ec5838fba6681/torchcrepe/assets/full.pth"
+            ),
+            sha256="133225604dedd2e4005f8bbd1bd0a2ec073ba8b7a6cd31ff6d5edbbfa3539986",
+            file_name="full.pth",
+            size_mb=85,
+        ),
+    ]
+
+
 def get_all_model_configs() -> list[ModelConfig]:
-    """Return the full list of model configs (TTS + STT + LLM)."""
+    """Return the full list of model configs (TTS + STT + LLM + RVC)."""
     return (
         _get_qwen_model_configs()
         + _get_qwen_custom_voice_configs()
         + _get_non_qwen_tts_configs()
         + _get_whisper_configs()
         + _get_qwen_llm_configs()
+        + _get_rvc_model_configs()
     )
 
 
@@ -654,6 +712,30 @@ def get_model_load_func(config: ModelConfig):
     if config.engine == "qwen_llm":
         return lambda: llm_service.get_llm_model().load_model(config.model_size)
 
+    if config.engine == "rvc":
+        # RVC system models are shared backbones downloaded (not loaded into
+        # torch memory) via the Models tab. There is no "rvc" TTS backend, so
+        # dispatch by model_name to a download-only callable; each reports
+        # progress through model_load_progress like the runtime loaders in
+        # rvc/features.py and rvc/pitch.py.
+        if config.model_name == "contentvec":
+            from .rvc.features import download_contentvec
+
+            return download_contentvec
+        if config.model_name == "rmvpe":
+            from .rvc.pitch import download_rmvpe
+
+            return download_rmvpe
+        if getattr(config, "download_url", None):
+            # crepe-full: the /models/download route already routes download_url
+            # configs to download_direct_model before reaching here; handle it
+            # defensively too. download_direct_model is async — return the
+            # coroutine so the caller (which awaits coroutine results) drives it.
+            from .base import download_direct_model
+
+            return lambda: download_direct_model(config)
+        raise ValueError(f"Unknown RVC system model: {config.model_name}")
+
     return lambda: get_tts_backend_for_engine(config.engine).load_model()
 
 
@@ -719,6 +801,10 @@ def get_tts_backend_for_engine(engine: str) -> TTSBackend:
             from .kokoro_backend import KokoroTTSBackend
 
             backend = KokoroTTSBackend()
+        elif engine == "voxtral":
+            from .voxtral_backend import VoxtralTTSBackend
+
+            backend = VoxtralTTSBackend()
         elif engine == "qwen_custom_voice":
             from .qwen_custom_voice_backend import QwenCustomVoiceBackend
 

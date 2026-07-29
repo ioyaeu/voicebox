@@ -2,24 +2,79 @@
 MLX backend implementation for TTS and STT using mlx-audio.
 """
 
-from typing import Optional, List, Tuple
 import asyncio
+import contextvars
+import functools
 import logging
-import numpy as np
+import threading
+from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-logger = logging.getLogger(__name__)
+import numpy as np
 
 # PATCH: Import and apply offline patch BEFORE any huggingface_hub usage
 # This prevents mlx_audio from making network requests when models are cached
-from ..utils.hf_offline_patch import patch_huggingface_hub_offline, ensure_original_qwen_config_cached
+from ..utils.hf_offline_patch import ensure_original_qwen_config_cached, patch_huggingface_hub_offline
 
 patch_huggingface_hub_offline()
 ensure_original_qwen_config_cached()
 
-from . import TTSBackend, STTBackend, LANGUAGE_CODE_TO_NAME, WHISPER_HF_REPOS
-from .base import is_model_cached, combine_voice_prompts as _combine_voice_prompts, model_load_progress
-from ..utils.cache import get_cache_key, get_cached_voice_prompt, cache_voice_prompt
+from ..utils.cache import cache_voice_prompt, get_cache_key, get_cached_voice_prompt  # noqa: E402
+from . import LANGUAGE_CODE_TO_NAME, WHISPER_HF_REPOS  # noqa: E402
+from .base import (  # noqa: E402
+    combine_voice_prompts as _combine_voice_prompts,
+    is_model_cached,
+    model_load_progress,
+)
+
+logger = logging.getLogger(__name__)
+
+# MLX streams are thread-local and mlx-audio caches one on the model at load
+# time, so model load and inference must run on the same OS thread.
+_mlx_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="mlx")
+_mlx_worker_state = threading.local()
+
+
+def _mark_mlx_worker[T](func: Callable[..., T], *args: object, **kwargs: object) -> T:
+    _mlx_worker_state.active = True
+    try:
+        return func(*args, **kwargs)
+    finally:
+        _mlx_worker_state.active = False
+
+
+async def _run_on_mlx_thread[T](func: Callable[..., T], *args: object, **kwargs: object) -> T:
+    """Run a blocking MLX call on the single dedicated MLX worker thread."""
+    loop = asyncio.get_running_loop()
+    ctx = contextvars.copy_context()
+    return await loop.run_in_executor(
+        _mlx_executor,
+        functools.partial(_mark_mlx_worker, ctx.run, func, *args, **kwargs),
+    )
+
+
+def _run_on_mlx_thread_blocking[T](func: Callable[..., T], *args: object, **kwargs: object) -> T:
+    """Synchronously run a blocking MLX call on the dedicated MLX worker."""
+    if getattr(_mlx_worker_state, "active", False):
+        return func(*args, **kwargs)
+    ctx = contextvars.copy_context()
+    return _mlx_executor.submit(_mark_mlx_worker, ctx.run, func, *args, **kwargs).result()
+
+
+def ensure_realtime_stream_not_active(operation: str = "MLX inference") -> None:
+    """Keep heavy MLX work from starving the realtime RVC stream."""
+    try:
+        from .rvc import realtime_stream_active
+
+        active = realtime_stream_active()
+    except Exception:
+        active = False
+    if active:
+        raise RuntimeError(
+            f"{operation} is blocked while Voice Changer real-time streaming is active. "
+            "Stop the live stream and try again."
+        )
 
 
 class MLXTTSBackend:
@@ -63,7 +118,7 @@ class MLXTTSBackend:
             weight_extensions=(".safetensors", ".bin", ".npz"),
         )
 
-    async def load_model_async(self, model_size: Optional[str] = None):
+    async def load_model_async(self, model_size: str | None = None):
         """
         Lazy load the MLX TTS model.
 
@@ -81,8 +136,10 @@ class MLXTTSBackend:
         if self.model is not None and self._current_model_size != model_size:
             self.unload_model()
 
-        # Run blocking load in thread pool
-        await asyncio.to_thread(self._load_model_sync, model_size)
+        ensure_realtime_stream_not_active("MLX TTS model loading")
+
+        # Run blocking load on the dedicated MLX worker thread.
+        await _run_on_mlx_thread(self._load_model_sync, model_size)
 
     # Alias for compatibility
     load_model = load_model_async
@@ -105,19 +162,47 @@ class MLXTTSBackend:
         logger.info("MLX TTS model %s loaded successfully", model_size)
 
     def unload_model(self):
-        """Unload the model to free memory."""
+        _run_on_mlx_thread_blocking(self._unload_model_sync)
+
+    def _unload_model_sync(self):
+        """Unload the model and release MLX's Metal buffer pool.
+
+        `del self.model` drops MLX's *live* buffers, but MLX keeps a separate
+        Metal *cache* pool that is not freed by that — and torch's
+        `mps.empty_cache()` (called on the shared unload path) only touches
+        torch's pool, never MLX's. The RVC chain unloads the base engine here to
+        free VRAM before loading the torch/MPS RVC stack, so release MLX's cache
+        too or the two frameworks contend for Metal memory. EXPERIMENTAL: done
+        only here (unload), never per-chunk, so the resident non-RVC hot path is
+        untouched. The before/after log is the probe — if `active` stays high
+        after `del`, a live MLX reference survived elsewhere (clear_cache only
+        frees the cache, not live buffers)."""
         if self.model is not None:
+            import mlx.core as mx
+
+            active_before = mx.get_active_memory() / 1e6
+            cache_before = mx.get_cache_memory() / 1e6
             del self.model
             self.model = None
             self._current_model_size = None
-            logger.info("MLX TTS model unloaded")
+            active_after_del = mx.get_active_memory() / 1e6
+            mx.clear_cache()
+            logger.info(
+                "MLX TTS model unloaded — Metal MB: active %.0f->%.0f (after clear %.0f), cache %.0f->%.0f, peak %.0f",
+                active_before,
+                active_after_del,
+                mx.get_active_memory() / 1e6,
+                cache_before,
+                mx.get_cache_memory() / 1e6,
+                mx.get_peak_memory() / 1e6,
+            )
 
     async def create_voice_prompt(
         self,
         audio_path: str,
         reference_text: str,
         use_cache: bool = True,
-    ) -> Tuple[dict, bool]:
+    ) -> tuple[dict, bool]:
         """
         Create voice prompt from reference audio.
 
@@ -138,16 +223,13 @@ class MLXTTSBackend:
         if use_cache:
             cache_key = get_cache_key(audio_path, reference_text)
             cached_prompt = get_cached_voice_prompt(cache_key)
-            if cached_prompt is not None:
-                # Return cached prompt (should be dict format)
-                if isinstance(cached_prompt, dict):
-                    # Validate that the cached audio file still exists
-                    cached_audio_path = cached_prompt.get("ref_audio") or cached_prompt.get("ref_audio_path")
-                    if cached_audio_path and Path(cached_audio_path).exists():
-                        return cached_prompt, True
-                    else:
-                        # Cached file no longer exists, invalidate cache
-                        logger.warning("Cached audio file not found: %s, regenerating prompt", cached_audio_path)
+            if cached_prompt is not None and isinstance(cached_prompt, dict):
+                # Validate that the cached audio file still exists
+                cached_audio_path = cached_prompt.get("ref_audio") or cached_prompt.get("ref_audio_path")
+                if cached_audio_path and Path(cached_audio_path).exists():
+                    return cached_prompt, True
+                # Cached file no longer exists, invalidate cache
+                logger.warning("Cached audio file not found: %s, regenerating prompt", cached_audio_path)
 
         # MLX voice prompt format - store audio path and text
         # The model will process this during generation
@@ -171,9 +253,9 @@ class MLXTTSBackend:
         text: str,
         voice_prompt: dict,
         language: str = "en",
-        seed: Optional[int] = None,
-        instruct: Optional[str] = None,
-    ) -> Tuple[np.ndarray, int]:
+        seed: int | None = None,
+        instruct: str | None = None,
+    ) -> tuple[np.ndarray, int]:
         """
         Generate audio from text using voice prompt.
 
@@ -190,6 +272,7 @@ class MLXTTSBackend:
         await self.load_model_async(None)
 
         logger.info("Generating audio for text: %s", text)
+        ensure_realtime_stream_not_active("MLX TTS generation")
 
         def _generate_sync():
             """Run synchronous generation in thread pool."""
@@ -258,8 +341,8 @@ class MLXTTSBackend:
 
             return audio, sample_rate
 
-        # Run blocking inference in thread pool
-        audio, sample_rate = await asyncio.to_thread(_generate_sync)
+        # Run blocking inference on the dedicated MLX worker thread.
+        audio, sample_rate = await _run_on_mlx_thread(_generate_sync)
 
         return audio, sample_rate
 
@@ -279,7 +362,7 @@ class MLXSTTBackend:
         hf_repo = WHISPER_HF_REPOS.get(model_size, f"openai/whisper-{model_size}")
         return is_model_cached(hf_repo, weight_extensions=(".safetensors", ".bin", ".npz"))
 
-    async def load_model_async(self, model_size: Optional[str] = None):
+    async def load_model_async(self, model_size: str | None = None):
         """
         Lazy load the MLX Whisper model.
 
@@ -292,8 +375,10 @@ class MLXSTTBackend:
         if self.model is not None and self.model_size == model_size:
             return
 
-        # Run blocking load in thread pool
-        await asyncio.to_thread(self._load_model_sync, model_size)
+        ensure_realtime_stream_not_active("MLX Whisper model loading")
+
+        # Run blocking load on the dedicated MLX worker thread.
+        await _run_on_mlx_thread(self._load_model_sync, model_size)
 
     # Alias for compatibility
     load_model = load_model_async
@@ -315,6 +400,9 @@ class MLXSTTBackend:
         logger.info("MLX Whisper model %s loaded successfully", model_size)
 
     def unload_model(self):
+        _run_on_mlx_thread_blocking(self._unload_model_sync)
+
+    def _unload_model_sync(self):
         """Unload the model to free memory."""
         if self.model is not None:
             del self.model
@@ -324,8 +412,8 @@ class MLXSTTBackend:
     async def transcribe(
         self,
         audio_path: str,
-        language: Optional[str] = None,
-        model_size: Optional[str] = None,
+        language: str | None = None,
+        model_size: str | None = None,
     ) -> str:
         """
         Transcribe audio to text.
@@ -339,6 +427,7 @@ class MLXSTTBackend:
             Transcribed text
         """
         await self.load_model_async(model_size)
+        ensure_realtime_stream_not_active("MLX Whisper transcription")
 
         def _transcribe_sync():
             """Run synchronous transcription in thread pool."""
@@ -356,12 +445,11 @@ class MLXSTTBackend:
             # Extract text from result
             if isinstance(result, str):
                 return result.strip()
-            elif isinstance(result, dict):
+            if isinstance(result, dict):
                 return result.get("text", "").strip()
-            elif hasattr(result, "text"):
+            if hasattr(result, "text"):
                 return result.text.strip()
-            else:
-                return str(result).strip()
+            return str(result).strip()
 
-        # Run blocking transcription in thread pool
-        return await asyncio.to_thread(_transcribe_sync)
+        # Run blocking transcription on the dedicated MLX worker thread.
+        return await _run_on_mlx_thread(_transcribe_sync)

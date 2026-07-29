@@ -1,19 +1,33 @@
 """Transcription endpoints."""
 
 import asyncio
+import logging
 import tempfile
 from pathlib import Path
 
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
+from starlette.requests import ClientDisconnect
 
 from .. import models
 from ..services import transcribe
 from ..services.task_queue import create_background_task
 from ..utils.tasks import get_task_manager
 
+logger = logging.getLogger(__name__)
+
 router = APIRouter()
 
 UPLOAD_CHUNK_SIZE = 1024 * 1024  # 1MB
+UPLOAD_AUDIO_EXTENSIONS = {".wav", ".mp3", ".flac", ".ogg", ".m4a", ".aac", ".webm"}
+
+
+def _upload_suffix(filename: str | None) -> str:
+    suffix = Path(filename or "").suffix.lower()
+    return suffix if suffix in UPLOAD_AUDIO_EXTENSIONS else ".wav"
+
+
+def _is_realtime_conflict(exc: RuntimeError) -> bool:
+    return "real-time streaming is active" in str(exc)
 
 # Same set profiles.py accepts for voice samples. librosa picks its decoder from the
 # file extension, so the temp file has to keep the uploaded one.
@@ -27,13 +41,15 @@ async def transcribe_audio(
     model: str | None = Form(None),
 ):
     """Transcribe audio file to text."""
-    uploaded_ext = Path(file.filename or "").suffix.lower()
-    file_suffix = uploaded_ext if uploaded_ext in ALLOWED_AUDIO_EXTS else ".wav"
-
-    with tempfile.NamedTemporaryFile(suffix=file_suffix, delete=False) as tmp:
-        while chunk := await file.read(UPLOAD_CHUNK_SIZE):
-            tmp.write(chunk)
-        tmp_path = tmp.name
+    file_suffix = _upload_suffix(file.filename)
+    try:
+        with tempfile.NamedTemporaryFile(suffix=file_suffix, delete=False) as tmp:
+            while chunk := await file.read(UPLOAD_CHUNK_SIZE):
+                tmp.write(chunk)
+            tmp_path = tmp.name
+    except (ClientDisconnect, BrokenPipeError, ConnectionResetError):
+        logger.debug("Client disconnected during transcription upload")
+        raise HTTPException(status_code=499, detail="Client disconnected during upload")
 
     stt_path = tmp_path
     try:
@@ -97,6 +113,10 @@ async def transcribe_audio(
 
     except HTTPException:
         raise
+    except RuntimeError as e:
+        if _is_realtime_conflict(e):
+            raise HTTPException(status_code=409, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
     finally:

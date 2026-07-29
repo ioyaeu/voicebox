@@ -1,23 +1,30 @@
 # MLX-specific dependencies (Apple Silicon only)
 # These should only be installed on aarch64-apple-darwin platforms
 
-mlx>=0.30.0
+# Keep MLX pinned with the mlx-audio 0.4.3 stack validated on Apple Silicon.
+mlx==0.31.2
+numpy>=1.24.0,<2.0
 
-# miniaudio is a runtime dep of mlx-audio's STT path (mlx_audio.stt).
-# mlx-audio itself is installed --no-deps (see comment below), so we
-# must list miniaudio explicitly here or transcription fails on fresh
-# M1 installs with `ModuleNotFoundError: miniaudio` (issue #505).
-miniaudio>=1.59
+# mlx-audio itself is installed --no-deps (see comment below), so runtime
+# dependencies that are not already guaranteed by requirements.txt must be
+# listed explicitly here.
+miniaudio>=1.61,<2.0
+sounddevice>=0.5.3,<0.6
+sentencepiece>=0.2.0,<0.3
+
+# Voxtral TTS uses Mistral's Tekken tokenizer / speech request helpers.
+mistral-common[audio]>=1.5.0,<2.0
 
 # NOTE: mlx-audio is intentionally not listed here. From 0.3.1 onward it
 # declares `transformers==5.0.0rc3` / `>=5.0.0`, which conflicts with the
 # `transformers<=4.57.6` cap in requirements.txt and breaks CI's clean
 # resolver. The mlx-audio API surface we use (mlx_audio.tts.load,
-# mlx_audio.stt.load) works fine on transformers 4.57.x in practice.
+# mlx_audio.stt.load) works fine on transformers 4.57.x in practice. Voxtral
+# TTS imports mistral-common directly and does not require bumping transformers.
 #
-# Install it via `pip install --no-deps mlx-audio==0.4.1` after this file
+# Install it via `pip install --no-deps mlx-audio==0.4.3` after this file
 # (see .github/workflows/release.yml and the setup-python recipe in the
-# justfile). Most other mlx-audio runtime deps
+# justfile). The remaining shared runtime deps
 # (huggingface_hub, librosa, mlx-lm, numba, numpy, protobuf, pyloudnorm,
-# sounddevice, tqdm) are already in requirements.txt or pulled in by
-# other engines.
+# pyyaml, jinja2, tqdm) are already in requirements.txt, installed --no-deps
+# below, or pulled in by other engines.

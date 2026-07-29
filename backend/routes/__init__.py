@@ -9,6 +9,7 @@ def register_routers(app: FastAPI) -> None:
     from .profiles import router as profiles_router
     from .channels import router as channels_router
     from .generations import router as generations_router
+    from .convert import router as convert_router
     from .history import router as history_router
     from .transcription import router as transcription_router
     from .llm import router as llm_router
@@ -30,6 +31,7 @@ def register_routers(app: FastAPI) -> None:
     app.include_router(profiles_router)
     app.include_router(channels_router)
     app.include_router(generations_router)
+    app.include_router(convert_router)
     app.include_router(history_router)
     app.include_router(transcription_router)
     app.include_router(llm_router)

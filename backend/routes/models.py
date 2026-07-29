@@ -252,6 +252,8 @@ async def get_model_status():
             "display_name": cfg.display_name,
             "hf_repo_id": cfg.hf_repo_id,
             "model_size": cfg.model_size,
+            "config": cfg,
+            "download_url": cfg.download_url,
             "check_loaded": lambda c=cfg: check_model_loaded(c),
         }
         for cfg in registry_configs
@@ -274,6 +276,37 @@ async def get_model_status():
             downloaded = False
             size_mb = None
             loaded = False
+
+            if config["download_url"]:
+                # Direct-download model: status comes from the verified file on
+                # disk, not the HF cache layout.
+                from ..backends.base import get_direct_download_path, is_direct_download_cached
+
+                cfg = config["config"]
+                is_downloading = config["model_name"] in active_download_names
+                downloaded = (not is_downloading) and is_direct_download_cached(cfg)
+                if downloaded:
+                    file_path = get_direct_download_path(cfg)
+                    try:
+                        size_mb = file_path.stat().st_size / (1024 * 1024)
+                    except OSError:
+                        size_mb = float(cfg.size_mb) or None
+                try:
+                    loaded = config["check_loaded"]()
+                except Exception:
+                    loaded = False
+                statuses.append(
+                    models.ModelStatus(
+                        model_name=config["model_name"],
+                        display_name=config["display_name"],
+                        hf_repo_id=config["hf_repo_id"] or None,
+                        downloaded=downloaded,
+                        downloading=is_downloading,
+                        size_mb=size_mb,
+                        loaded=loaded,
+                    )
+                )
+                continue
 
             if cache_info:
                 repo_id = config["hf_repo_id"]
@@ -399,16 +432,26 @@ async def trigger_model_download(request: models.ModelDownloadRequest):
     if not config:
         raise HTTPException(status_code=400, detail=f"Unknown model: {request.model_name}")
 
-    load_func = get_model_load_func(config)
+    if getattr(config, "download_url", None):
+        from ..backends.base import download_direct_model
 
-    async def download_in_background():
-        try:
-            result = load_func()
-            if asyncio.iscoroutine(result):
-                await result
-            task_manager.complete_download(request.model_name)
-        except Exception as e:
-            task_manager.error_download(request.model_name, str(e))
+        async def download_in_background():
+            try:
+                await download_direct_model(config)
+                task_manager.complete_download(request.model_name)
+            except Exception as e:
+                task_manager.error_download(request.model_name, str(e))
+    else:
+        load_func = get_model_load_func(config)
+
+        async def download_in_background():
+            try:
+                result = load_func()
+                if asyncio.iscoroutine(result):
+                    await result
+                task_manager.complete_download(request.model_name)
+            except Exception as e:
+                task_manager.error_download(request.model_name, str(e))
 
     task_manager.start_download(request.model_name)
 
@@ -416,7 +459,7 @@ async def trigger_model_download(request: models.ModelDownloadRequest):
         model_name=request.model_name,
         current=0,
         total=0,
-        filename="Connecting to HuggingFace...",
+        filename="Connecting..." if getattr(config, "download_url", None) else "Connecting to HuggingFace...",
         status="downloading",
     )
 
@@ -453,6 +496,22 @@ async def delete_model(model_name: str):
     config = get_model_config(model_name)
     if not config:
         raise HTTPException(status_code=400, detail=f"Unknown model: {model_name}")
+
+    if getattr(config, "download_url", None):
+        from ..backends.base import get_direct_download_path
+        from ..backends.rvc.pitch import unload_crepe
+
+        file_path = get_direct_download_path(config)
+        model_dir = file_path.parent if file_path else None
+        if model_dir is None or not model_dir.exists():
+            raise HTTPException(status_code=404, detail=f"Model {model_name} not found in cache")
+        if model_name == "crepe-full":
+            unload_crepe()
+        try:
+            shutil.rmtree(model_dir)
+        except OSError as e:
+            raise HTTPException(status_code=500, detail=f"Failed to delete model cache directory: {str(e)}")
+        return {"message": f"Model {model_name} deleted successfully"}
 
     hf_repo_id = config.hf_repo_id
 

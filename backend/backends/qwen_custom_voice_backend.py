@@ -99,7 +99,15 @@ class QwenCustomVoiceBackend:
         is_cached = self._is_model_cached(model_size)
 
         with model_load_progress(model_name, is_cached):
-            from qwen_tts import Qwen3TTSModel
+            from ..utils.qwen_sox_shim import (
+                install_qwen_sox_norm_shim,
+                sox_import_probe_stub_if_missing,
+            )
+
+            with sox_import_probe_stub_if_missing():
+                from qwen_tts import Qwen3TTSModel
+
+            install_qwen_sox_norm_shim()
 
             model_path = self._get_model_path(model_size)
             logger.info("Loading Qwen CustomVoice %s on %s...", model_size, self.device)
