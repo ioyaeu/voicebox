@@ -20,6 +20,7 @@
     "audio": "Audio",
     "models": "Models",
     "settings": "Settings",
+    "voiceChanger": "Voice Changer",
     "updateBadge": "Update"
   },
   "captures": {
@@ -243,12 +244,78 @@
     "discard": "Discard",
     "source": {
       "clone": "Clone from audio",
-      "builtin": "Built-in voice"
+      "builtin": "Built-in voice",
+      "rvc": "RVC model"
     },
     "builtin": {
       "hint": "Choose a pre-built voice. These don't require an audio sample.",
       "badge": "Built-in Voice",
       "note": "This profile uses a built-in voice. The voice cannot be changed after creation."
+    },
+    "rvc": {
+      "createHint": "Upload a trained RVC model to convert any recording into this voice. A feature index is optional but improves timbre similarity.",
+      "modelLabel": "Voice model (.pth)",
+      "modelHint": "Required. The trained RVC generator checkpoint.",
+      "indexLabel": "Feature index (.index)",
+      "indexHint": "Optional. Improves timbre similarity during conversion.",
+      "chooseModel": "Choose .pth file",
+      "chooseIndex": "Choose .index file",
+      "remove": "Remove file",
+      "noModel": "No model uploaded yet. Add a .pth checkpoint to enable conversion.",
+      "modelReady": "Model ready",
+      "upload": "Upload model",
+      "uploadingShort": "Uploading…",
+      "uploading": "Uploading… {{percent}}%",
+      "validating": "Validating…",
+      "replace": "Replace model",
+      "delete": "Delete model",
+      "deleting": "Deleting…",
+      "deleteDialog": {
+        "title": "Remove RVC model?",
+        "description": "This permanently deletes the uploaded model and feature index for this voice. This can't be undone."
+      },
+      "metadata": {
+        "title": "Model details",
+        "version": "Version",
+        "sampleRate": "Sample rate",
+        "sampleRateValue": "{{value}} Hz",
+        "f0": "Pitch model",
+        "f0Yes": "Yes",
+        "f0No": "No",
+        "index": "Feature index",
+        "indexPresent": "Present",
+        "indexAbsent": "None"
+      },
+      "validation": {
+        "modelRequired": "A .pth model file is required.",
+        "modelExtension": "The voice model must be a .pth file.",
+        "indexExtension": "The feature index must be a .index file."
+      },
+      "toast": {
+        "profileCreated": "\"{{name}}\" has been created with an RVC model.",
+        "modelUploaded": "Model uploaded",
+        "modelUploadedDescription": "The RVC checkpoint was validated and saved.",
+        "modelDeleted": "Model removed",
+        "uploadFailed": "Model upload failed",
+        "deleteFailed": "Failed to remove model"
+      },
+      "chain": {
+        "title": "Base voice & conversion",
+        "hint": "Text is spoken with this base voice, then converted into your RVC voice.",
+        "baseEngine": "Base engine",
+        "baseVoice": "Base voice",
+        "baseVoicePlaceholder": "Select a voice…",
+        "baseSource": "Base source",
+        "baseProfilePlaceholder": "Select a profile…",
+        "profileSource": "Voicebox profile",
+        "coverageHint": "Need a language the presets don't cover (e.g. Russian)? Choose “Voicebox profile” above and use a cloned profile as the base.",
+        "noProfiles": "No non-RVC profiles yet. Create a cloned, preset, or designed voice first to use one as the base.",
+        "profileType": {
+          "cloned": "cloned",
+          "preset": "preset",
+          "designed": "designed"
+        }
+      }
     },
     "sampleTabs": {
       "upload": "Upload",
@@ -396,6 +463,7 @@
     "card": {
       "noDescription": "No description",
       "designed": "designed",
+      "rvc": "RVC",
       "export": "Export profile",
       "edit": "Edit profile",
       "delete": "Delete profile",
@@ -700,6 +768,7 @@
       "tooltip": "Delivery instructions (tone, emotion, pace)",
       "placeholder": "Delivery instructions — e.g. Speak slowly with warmth, Authoritative and clear…"
     },
+    "rvcBaseVoice": "RVC voice",
     "voiceSelector": {
       "placeholder": "Select a voice…"
     },
@@ -1268,6 +1337,117 @@
       "migrationFailed": "Migration failed",
       "migrationFailedGeneric": "Failed to migrate models",
       "migrationConnectionLost": "Lost connection during migration"
+    }
+  },
+  "voiceChanger": {
+    "title": "Voice Changer",
+    "description": "Convert a recording into one of your RVC voices.",
+    "mode": {
+      "file": "File",
+      "realtime": "Real-time",
+      "realtimeComingSoon": "Real-time conversion is coming soon."
+    },
+    "empty": {
+      "title": "No RVC voices with a model yet",
+      "description": "Create an RVC voice profile and upload a .pth model to start converting recordings.",
+      "cta": "Go to Voices"
+    },
+    "loadError": {
+      "title": "Couldn't load voices",
+      "description": "Something went wrong loading your voice profiles. Check that the backend is running and try again."
+    },
+    "source": {
+      "title": "Source audio",
+      "dropTitle": "Drop an audio file or click to browse",
+      "dropHint": "WAV, MP3, FLAC, M4A and other common formats",
+      "clear": "Remove file",
+      "invalidFile": "That file isn't a supported audio format."
+    },
+    "profile": {
+      "title": "Target voice",
+      "label": "RVC voice profile",
+      "placeholder": "Select a voice"
+    },
+    "params": {
+      "title": "Conversion settings",
+      "advanced": "Advanced",
+      "pitch": {
+        "label": "Pitch shift",
+        "value": "{{value}} st",
+        "hint": "Shift the pitch in semitones. Try +12 for male → female, -12 for female → male."
+      },
+      "f0Method": {
+        "label": "Pitch estimator",
+        "rmvpe": "RMVPE (recommended)",
+        "crepe": "CREPE",
+        "hint": "RMVPE is fast and robust. CREPE can be smoother on clean vocals."
+      },
+      "indexRate": {
+        "label": "Index rate",
+        "hint": "How strongly the feature index shapes the timbre.",
+        "noIndex": "This voice has no feature index, so index rate has no effect."
+      },
+      "rmsMixRate": {
+        "label": "Volume envelope",
+        "hint": "0 keeps the source loudness, 1 mimics the target voice's loudness."
+      },
+      "protect": {
+        "label": "Consonant protection",
+        "hint": "Higher values protect breaths and consonants from artifacts."
+      }
+    },
+    "convert": {
+      "action": "Convert",
+      "starting": "Starting…",
+      "inProgress": "Converting…",
+      "loadingModel": "Loading model…",
+      "failed": "Conversion failed"
+    },
+    "result": {
+      "title": "Conversion complete",
+      "play": "Play",
+      "download": "Download",
+      "downloading": "Downloading…"
+    },
+    "realtime": {
+      "start": "Start conversion",
+      "stop": "Stop",
+      "connecting": "Connecting…",
+      "devices": {
+        "title": "Audio devices",
+        "input": "Input (microphone)",
+        "output": "Output device",
+        "systemDefault": "System default",
+        "outputUnsupported": "Output device selection isn't available in this environment; audio plays to the system default.",
+        "permissionHint": "Grant microphone access to see device names.",
+        "grantAccess": "List audio devices",
+        "persistedSinkMissing": "Your saved output device isn't in the current list. It may be unplugged, or its name hasn't loaded yet — grant microphone access to refresh. Your selection is kept.",
+        "outputRouteFailed": "Couldn't route audio to “{{device}}”. The converted voice is NOT going to that device, so Discord and other apps won't receive it — playback is on hold. Pick a different output device or switch to System default."
+      },
+      "monitor": {
+        "title": "Monitoring",
+        "label": "Hear yourself",
+        "hint": "Off by default. Turn on to monitor the converted voice through your local output.",
+        "warning": "Use headphones. Monitoring through speakers while the mic is open will cause feedback."
+      },
+      "meters": {
+        "input": "Input",
+        "output": "Output",
+        "latency": "Latency",
+        "latencyValue": "~{{ms}} ms",
+        "bufferedValue": "{{ms}} ms buffered"
+      },
+      "overload": "Can't keep up in real time (inference {{ms}} ms/block). Try a smaller model or a faster device, or expect choppy output.",
+      "virtual": {
+        "title": "Route to a virtual audio device",
+        "description": "To feed the converted voice into Discord, games or calls, install a virtual audio cable ({{name}}). Voicebox doesn't bundle it.",
+        "step1": "Install {{name}} and restart your computer if prompted.",
+        "step2": "Above, set the output device to {{name}}.",
+        "step3": "In Discord or your app, choose {{name}} as the microphone.",
+        "install": "Install {{name}}",
+        "blackhole": "BlackHole 2ch",
+        "vbcable": "VB-CABLE"
+      }
     }
   }
 }

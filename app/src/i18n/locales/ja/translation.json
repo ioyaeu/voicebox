@@ -20,6 +20,7 @@
     "audio": "オーディオ",
     "models": "モデル",
     "settings": "設定",
+    "voiceChanger": "ボイスチェンジャー",
     "updateBadge": "更新"
   },
   "captures": {
@@ -243,12 +244,78 @@
     "discard": "破棄",
     "source": {
       "clone": "オーディオから複製",
-      "builtin": "ビルトインボイス"
+      "builtin": "ビルトインボイス",
+      "rvc": "RVCモデル"
     },
     "builtin": {
       "hint": "あらかじめ用意されたボイスを選択してください。オーディオサンプルは不要です。",
       "badge": "ビルトインボイス",
       "note": "このプロファイルはビルトインボイスを使用しています。作成後はボイスを変更できません。"
+    },
+    "rvc": {
+      "createHint": "録音した音声をこのボイスに変換する、学習済みのRVCモデルをアップロードします。特徴インデックスは任意ですが、音色の類似度が向上します。",
+      "modelLabel": "ボイスモデル（.pth）",
+      "modelHint": "必須。学習済みのRVCジェネレーターのチェックポイントです。",
+      "indexLabel": "特徴インデックス（.index）",
+      "indexHint": "任意。変換時の音色の類似度が向上します。",
+      "chooseModel": ".pth ファイルを選択",
+      "chooseIndex": ".index ファイルを選択",
+      "remove": "ファイルを削除",
+      "noModel": "モデルが未アップロードです。.pth チェックポイントを追加すると変換が有効になります。",
+      "modelReady": "モデルの準備完了",
+      "upload": "モデルをアップロード",
+      "uploadingShort": "アップロード中…",
+      "uploading": "アップロード中… {{percent}}%",
+      "validating": "検証中…",
+      "replace": "モデルを置き換え",
+      "delete": "モデルを削除",
+      "deleting": "削除中…",
+      "deleteDialog": {
+        "title": "RVCモデルを削除しますか？",
+        "description": "このボイスにアップロードされたモデルと特徴インデックスを完全に削除します。この操作は取り消せません。"
+      },
+      "metadata": {
+        "title": "モデルの詳細",
+        "version": "バージョン",
+        "sampleRate": "サンプルレート",
+        "sampleRateValue": "{{value}} Hz",
+        "f0": "ピッチモデル",
+        "f0Yes": "あり",
+        "f0No": "なし",
+        "index": "特徴インデックス",
+        "indexPresent": "あり",
+        "indexAbsent": "なし"
+      },
+      "validation": {
+        "modelRequired": ".pth モデルファイルが必要です。",
+        "modelExtension": "ボイスモデルは .pth ファイルである必要があります。",
+        "indexExtension": "特徴インデックスは .index ファイルである必要があります。"
+      },
+      "toast": {
+        "profileCreated": "「{{name}}」をRVCモデルで作成しました。",
+        "modelUploaded": "モデルをアップロードしました",
+        "modelUploadedDescription": "RVC チェックポイントを検証して保存しました。",
+        "modelDeleted": "モデルを削除しました",
+        "uploadFailed": "モデルのアップロードに失敗しました",
+        "deleteFailed": "モデルの削除に失敗しました"
+      },
+      "chain": {
+        "title": "ベースボイスと変換",
+        "hint": "テキストはこのベースボイスで読み上げられ、その後 RVC ボイスに変換されます。",
+        "baseEngine": "ベースエンジン",
+        "baseVoice": "ベースボイス",
+        "baseVoicePlaceholder": "ボイスを選択…",
+        "baseSource": "ベースソース",
+        "baseProfilePlaceholder": "プロフィールを選択…",
+        "profileSource": "Voicebox プロフィール",
+        "coverageHint": "プリセットが対応していない言語（例: ロシア語）が必要ですか？上で「Voicebox プロフィール」を選び、クローンしたプロフィールをベースに使ってください。",
+        "noProfiles": "RVC 以外のプロフィールがまだありません。まずクローン・プリセット・デザインのいずれかのボイスを作成してベースに使ってください。",
+        "profileType": {
+          "cloned": "クローン",
+          "preset": "プリセット",
+          "designed": "デザイン"
+        }
+      }
     },
     "sampleTabs": {
       "upload": "アップロード",
@@ -396,6 +463,7 @@
     "card": {
       "noDescription": "説明なし",
       "designed": "designed",
+      "rvc": "RVC",
       "export": "プロファイルをエクスポート",
       "edit": "プロファイルを編集",
       "delete": "プロファイルを削除",
@@ -700,6 +768,7 @@
       "tooltip": "デリバリー指示(トーン、感情、ペース)",
       "placeholder": "デリバリー指示 — 例:暖かくゆっくり話す、はっきりと威厳をもって…"
     },
+    "rvcBaseVoice": "RVCボイス",
     "voiceSelector": {
       "placeholder": "ボイスを選択…"
     },
@@ -1236,6 +1305,117 @@
       "migrationFailed": "移行に失敗しました",
       "migrationFailedGeneric": "モデルの移行に失敗しました",
       "migrationConnectionLost": "移行中に接続が切断されました"
+    }
+  },
+  "voiceChanger": {
+    "title": "ボイスチェンジャー",
+    "description": "録音した音声をあなたのRVCボイスに変換します。",
+    "mode": {
+      "file": "ファイル",
+      "realtime": "リアルタイム",
+      "realtimeComingSoon": "リアルタイム変換は近日公開予定です。"
+    },
+    "empty": {
+      "title": "モデル付きのRVCボイスがまだありません",
+      "description": "RVCボイスプロファイルを作成し、.pthモデルをアップロードすると録音を変換できます。",
+      "cta": "ボイスへ移動"
+    },
+    "loadError": {
+      "title": "ボイスを読み込めませんでした",
+      "description": "ボイスプロファイルの読み込み中に問題が発生しました。バックエンドが起動していることを確認して、もう一度お試しください。"
+    },
+    "source": {
+      "title": "元の音声",
+      "dropTitle": "音声ファイルをドロップするか、クリックして選択",
+      "dropHint": "WAV、MP3、FLAC、M4Aなどの一般的な形式",
+      "clear": "ファイルを削除",
+      "invalidFile": "そのファイルはサポートされている音声形式ではありません。"
+    },
+    "profile": {
+      "title": "変換先のボイス",
+      "label": "RVCボイスプロファイル",
+      "placeholder": "ボイスを選択"
+    },
+    "params": {
+      "title": "変換設定",
+      "advanced": "詳細設定",
+      "pitch": {
+        "label": "ピッチシフト",
+        "value": "{{value}} 半音",
+        "hint": "ピッチを半音単位で調整します。男性→女性は+12、女性→男性は-12が目安です。"
+      },
+      "f0Method": {
+        "label": "ピッチ推定",
+        "rmvpe": "RMVPE（推奨）",
+        "crepe": "CREPE",
+        "hint": "RMVPEは高速で安定しています。CREPEはクリーンなボーカルでより滑らかになる場合があります。"
+      },
+      "indexRate": {
+        "label": "インデックスレート",
+        "hint": "特徴インデックスが音色に与える影響の強さです。",
+        "noIndex": "このボイスには特徴インデックスがないため、インデックスレートは効果がありません。"
+      },
+      "rmsMixRate": {
+        "label": "音量エンベロープ",
+        "hint": "0は元の音量を保ち、1はターゲットボイスの音量に近づけます。"
+      },
+      "protect": {
+        "label": "子音保護",
+        "hint": "値を大きくすると、息づかいや子音のノイズを抑えます。"
+      }
+    },
+    "convert": {
+      "action": "変換",
+      "starting": "開始しています…",
+      "inProgress": "変換中…",
+      "loadingModel": "モデルを読み込み中…",
+      "failed": "変換に失敗しました"
+    },
+    "result": {
+      "title": "変換が完了しました",
+      "play": "再生",
+      "download": "ダウンロード",
+      "downloading": "ダウンロード中…"
+    },
+    "realtime": {
+      "start": "変換を開始",
+      "stop": "停止",
+      "connecting": "接続中…",
+      "devices": {
+        "title": "オーディオデバイス",
+        "input": "入力（マイク）",
+        "output": "出力デバイス",
+        "systemDefault": "システムのデフォルト",
+        "outputUnsupported": "この環境では出力デバイスを選択できません。音声はシステムのデフォルトに再生されます。",
+        "permissionHint": "デバイス名を表示するにはマイクへのアクセスを許可してください。",
+        "grantAccess": "オーディオデバイスを一覧表示",
+        "persistedSinkMissing": "保存された出力デバイスが現在の一覧にありません。接続が外れているか、名前がまだ読み込まれていない可能性があります。マイクへのアクセスを許可して更新してください。選択内容は保持されます。",
+        "outputRouteFailed": "「{{device}}」に音声をルーティングできませんでした。変換後の音声はこのデバイスに送られていないため、Discord などのアプリでは受信できません。再生は保留中です。別の出力デバイスを選ぶか、システムのデフォルトに切り替えてください。"
+      },
+      "monitor": {
+        "title": "モニタリング",
+        "label": "自分の声を聞く",
+        "hint": "デフォルトはオフです。オンにすると、変換後の音声をローカル出力で確認できます。",
+        "warning": "ヘッドフォンを使用してください。マイクを開いたままスピーカーでモニタリングするとハウリングが発生します。"
+      },
+      "meters": {
+        "input": "入力",
+        "output": "出力",
+        "latency": "遅延",
+        "latencyValue": "約 {{ms}} ms",
+        "bufferedValue": "バッファ {{ms}} ms"
+      },
+      "overload": "リアルタイム処理が追いつきません（推論 {{ms}} ms/ブロック）。より小さいモデルや高速なデバイスを試すか、音切れを許容してください。",
+      "virtual": {
+        "title": "仮想オーディオデバイスへ出力",
+        "description": "変換後の音声を Discord・ゲーム・通話に流すには、仮想オーディオケーブル（{{name}}）をインストールしてください。Voicebox には同梱されていません。",
+        "step1": "{{name}} をインストールし、求められたらパソコンを再起動します。",
+        "step2": "上で出力デバイスを {{name}} に設定します。",
+        "step3": "Discord などのアプリで、マイクとして {{name}} を選びます。",
+        "install": "{{name}} をインストール",
+        "blackhole": "BlackHole 2ch",
+        "vbcable": "VB-CABLE"
+      }
     }
   }
 }

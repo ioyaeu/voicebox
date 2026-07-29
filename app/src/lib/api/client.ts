@@ -53,7 +53,14 @@ import type {
   MCPClientBindingUpsert,
   CloudLoginStartResponse,
   CloudStatus,
+  ConvertResponse,
+  RvcConvertParams,
+  UploadProgress,
 } from './types';
+
+/** Hard ceiling for a single multipart upload (10 min) — guards against a
+ *  half-open socket wedging an RVC model upload forever. */
+const UPLOAD_TIMEOUT_MS = 10 * 60 * 1000;
 
 function formatErrorDetail(detail: unknown, fallback: string): string {
   if (typeof detail === 'string') return detail;
@@ -94,6 +101,89 @@ class ApiClient {
     }
 
     return response.json();
+  }
+
+  // Multipart upload with progress. `fetch` cannot report upload progress, so
+  // large-file endpoints (RVC `.pth` models) go through XHR while keeping the
+  // same detail-based error shape as `request`. Supports cancellation via an
+  // `AbortSignal` (e.g. the profile dialog closing) and a hard timeout so a
+  // half-open socket can never wedge the upload forever.
+  private uploadWithProgress<T>(
+    url: string,
+    formData: FormData,
+    onProgress?: (progress: UploadProgress) => void,
+    signal?: AbortSignal,
+  ): Promise<T> {
+    return new Promise<T>((resolve, reject) => {
+      if (signal?.aborted) {
+        reject(new DOMException('Upload aborted', 'AbortError'));
+        return;
+      }
+
+      const xhr = new XMLHttpRequest();
+      xhr.open('POST', url);
+      xhr.timeout = UPLOAD_TIMEOUT_MS;
+
+      const onAbort = () => xhr.abort();
+      signal?.addEventListener('abort', onAbort);
+      const cleanup = () => signal?.removeEventListener('abort', onAbort);
+
+      if (onProgress) {
+        let lastTotal = 0;
+        xhr.upload.onprogress = (event) => {
+          lastTotal = event.total;
+          onProgress({
+            loaded: event.loaded,
+            total: event.total,
+            fraction: event.lengthComputable && event.total > 0 ? event.loaded / event.total : 0,
+          });
+        };
+        // Body fully sent — the request is still open while the server validates
+        // the checkpoint. Report fraction 1 so the UI can show a "validating"
+        // state instead of a stuck 100% bar.
+        xhr.upload.onload = () => onProgress({ loaded: lastTotal, total: lastTotal, fraction: 1 });
+      }
+
+      xhr.onload = () => {
+        cleanup();
+        let body: unknown;
+        try {
+          body = xhr.responseText ? JSON.parse(xhr.responseText) : undefined;
+        } catch {
+          body = undefined;
+        }
+
+        if (xhr.status >= 200 && xhr.status < 300) {
+          resolve(body as T);
+          return;
+        }
+
+        const detail =
+          body && typeof body === 'object'
+            ? (body as Record<string, unknown>).detail
+            : undefined;
+        reject(
+          new Error(
+            formatErrorDetail(detail, `HTTP error! status: ${xhr.status || xhr.statusText}`),
+          ),
+        );
+      };
+
+      xhr.onerror = () => {
+        cleanup();
+        reject(new Error('Network error during upload'));
+      };
+      xhr.ontimeout = () => {
+        cleanup();
+        reject(new Error('Upload timed out'));
+      };
+      xhr.onabort = () => {
+        cleanup();
+        reject(new DOMException('Upload aborted', 'AbortError'));
+      };
+
+      xhr.send(formData);
+    });
   }
 
   // Health
@@ -248,6 +338,56 @@ class ApiClient {
     await this.request<void>(`/profiles/${profileId}/avatar`, {
       method: 'DELETE',
     });
+  }
+
+  // RVC voice conversion
+  async uploadRvcModel(
+    profileId: string,
+    modelFile: File,
+    indexFile?: File,
+    onProgress?: (progress: UploadProgress) => void,
+    signal?: AbortSignal,
+  ): Promise<VoiceProfileResponse> {
+    const url = `${this.getBaseUrl()}/profiles/${profileId}/rvc-model`;
+    const formData = new FormData();
+    formData.append('model', modelFile);
+    if (indexFile) formData.append('index', indexFile);
+
+    return this.uploadWithProgress<VoiceProfileResponse>(url, formData, onProgress, signal);
+  }
+
+  async deleteRvcModel(profileId: string): Promise<VoiceProfileResponse> {
+    return this.request<VoiceProfileResponse>(`/profiles/${profileId}/rvc-model`, {
+      method: 'DELETE',
+    });
+  }
+
+  async startConversion(
+    file: File,
+    profileId: string,
+    params?: RvcConvertParams,
+  ): Promise<ConvertResponse> {
+    const url = `${this.getBaseUrl()}/convert`;
+    const formData = new FormData();
+    formData.append('file', file);
+    formData.append('profile_id', profileId);
+    if (params?.f0_up_key !== undefined) formData.append('f0_up_key', String(params.f0_up_key));
+    if (params?.f0_method !== undefined) formData.append('f0_method', params.f0_method);
+    if (params?.index_rate !== undefined) formData.append('index_rate', String(params.index_rate));
+    if (params?.rms_mix_rate !== undefined) {
+      formData.append('rms_mix_rate', String(params.rms_mix_rate));
+    }
+    if (params?.protect !== undefined) formData.append('protect', String(params.protect));
+
+    const response = await fetch(url, { method: 'POST', body: formData });
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({
+        detail: response.statusText,
+      }));
+      throw new Error(formatErrorDetail(error.detail, `HTTP error! status: ${response.status}`));
+    }
+
+    return response.json();
   }
 
   // Generation

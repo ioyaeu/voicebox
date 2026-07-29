@@ -22,6 +22,7 @@ import { SettingsLayout } from '@/components/ServerTab/ServerTab';
 import { Sidebar } from '@/components/Sidebar';
 import { StoriesTab } from '@/components/StoriesTab/StoriesTab';
 import { Toaster } from '@/components/ui/toaster';
+import { VoiceChangerTab } from '@/components/VoiceChangerTab/VoiceChangerTab';
 import { VoicesTab } from '@/components/VoicesTab/VoicesTab';
 import { useGenerationProgress } from '@/lib/hooks/useGenerationProgress';
 import { useModelDownloadToast } from '@/lib/hooks/useModelDownloadToast';
@@ -127,6 +128,13 @@ const effectsRoute = createRoute({
   component: EffectsTab,
 });
 
+// Voice Changer route (RVC file conversion; real-time mode arrives in a later step)
+const voiceChangerRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/voice-changer',
+  component: VoiceChangerTab,
+});
+
 // Models route
 const modelsRoute = createRoute({
   getParentRoute: () => rootRoute,
@@ -206,6 +214,7 @@ const routeTree = rootRoute.addChildren([
   capturesRoute,
   voicesRoute,
   effectsRoute,
+  voiceChangerRoute,
   modelsRoute,
   settingsRoute.addChildren([
     settingsGeneralRoute,

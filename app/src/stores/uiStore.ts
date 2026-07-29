@@ -46,6 +46,13 @@ interface UIStore {
   selectedProfileId: string | null;
   setSelectedProfileId: (id: string | null) => void;
 
+  // Persisted output sink (deviceId) for the real-time voice changer, so a
+  // returning user keeps e.g. BlackHole selected before device enumeration
+  // finishes on a fresh launch. `null` means "system default". Kept here (not in
+  // server settings) because deviceIds are per-origin/per-machine browser state.
+  realtimeOutputDeviceId: string | null;
+  setRealtimeOutputDeviceId: (id: string | null) => void;
+
   // Currently selected engine (synced from generation form)
   selectedEngine: string;
   setSelectedEngine: (engine: string) => void;
@@ -80,6 +87,9 @@ export const useUIStore = create<UIStore>()(
       selectedProfileId: null,
       setSelectedProfileId: (id) => set({ selectedProfileId: id }),
 
+      realtimeOutputDeviceId: null,
+      setRealtimeOutputDeviceId: (id) => set({ realtimeOutputDeviceId: id }),
+
       selectedEngine: 'qwen',
       setSelectedEngine: (engine) => set({ selectedEngine: engine }),
 
@@ -100,6 +110,7 @@ export const useUIStore = create<UIStore>()(
       partialize: (state) => ({
         selectedProfileId: state.selectedProfileId,
         theme: state.theme,
+        realtimeOutputDeviceId: state.realtimeOutputDeviceId,
       }),
       onRehydrateStorage: () => (state) => {
         if (state) applyTheme(state.theme);

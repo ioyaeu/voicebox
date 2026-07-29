@@ -1,6 +1,6 @@
 import { zodResolver } from '@hookform/resolvers/zod';
 import { useQuery } from '@tanstack/react-query';
-import { Edit2, Mic, Monitor, Music, Upload, X } from 'lucide-react';
+import { Edit2, Mic, Monitor, Music, Upload, Waves, X } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import { useForm } from 'react-hook-form';
 import { useTranslation } from 'react-i18next';
@@ -36,7 +36,8 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Textarea } from '@/components/ui/textarea';
 import { useToast } from '@/components/ui/use-toast';
 import { apiClient } from '@/lib/api/client';
-import type { EffectConfig, PresetVoice, VoiceType } from '@/lib/api/types';
+import { DEFAULT_RVC_BASE_VOICE, RVC_DEFAULTS } from '@/lib/api/constants';
+import type { EffectConfig, PresetVoice, RvcConvertParams, VoiceType } from '@/lib/api/types';
 import { LANGUAGE_CODES, LANGUAGE_OPTIONS, type LanguageCode } from '@/lib/constants/languages';
 import { useAudioPlayer } from '@/lib/hooks/useAudioPlayer';
 import { useAudioRecording } from '@/lib/hooks/useAudioRecording';
@@ -49,6 +50,7 @@ import {
   useUpdateProfile,
   useUploadAvatar,
 } from '@/lib/hooks/useProfiles';
+import { useUploadRvcModel } from '@/lib/hooks/useRvc';
 import { useSystemAudioCapture } from '@/lib/hooks/useSystemAudioCapture';
 import { useTranscription } from '@/lib/hooks/useTranscription';
 import { convertToWav, formatAudioDuration, getAudioDuration } from '@/lib/utils/audio';
@@ -58,10 +60,11 @@ import { type ProfileFormDraft, useUIStore } from '@/stores/uiStore';
 import { AudioSampleRecording } from './AudioSampleRecording';
 import { AudioSampleSystem } from './AudioSampleSystem';
 import { AudioSampleUpload } from './AudioSampleUpload';
+import { RvcChainSettings, RvcModelManager, RvcModelPicker } from './RvcModelPanel';
 import { SampleList } from './SampleList';
 
 const MAX_AUDIO_DURATION_SECONDS = 30;
-const PRESET_ONLY_ENGINES = new Set(['kokoro', 'qwen_custom_voice']);
+const PRESET_ONLY_ENGINES = new Set(['kokoro', 'qwen_custom_voice', 'voxtral']);
 const DEFAULT_ENGINE_OPTIONS = [
   { value: 'qwen', label: 'Qwen3-TTS' },
   { value: 'qwen_custom_voice', label: 'Qwen CustomVoice' },
@@ -70,6 +73,7 @@ const DEFAULT_ENGINE_OPTIONS = [
   { value: 'chatterbox_turbo', label: 'Chatterbox Turbo' },
   { value: 'tada', label: 'TADA' },
   { value: 'kokoro', label: 'Kokoro 82M' },
+  { value: 'voxtral', label: 'Voxtral 4B TTS' },
 ] as const;
 
 function makeProfileSchema(t: (key: string) => string) {
@@ -146,8 +150,9 @@ export function ProfileForm() {
   const uploadAvatar = useUploadAvatar();
   const deleteAvatar = useDeleteAvatar();
   const transcribe = useTranscription();
+  const uploadRvcModel = useUploadRvcModel();
   const { toast } = useToast();
-  const [voiceSource, setVoiceSource] = useState<'clone' | 'builtin'>('clone');
+  const [voiceSource, setVoiceSource] = useState<'clone' | 'builtin' | 'rvc'>('clone');
   const [sampleMode, setSampleMode] = useState<'upload' | 'record' | 'system'>('record');
   const [audioDuration, setAudioDuration] = useState<number | null>(null);
   const [isValidatingAudio, setIsValidatingAudio] = useState(false);
@@ -161,6 +166,16 @@ export function ProfileForm() {
   const [profileEffectsChain, setProfileEffectsChain] = useState<EffectConfig[]>([]);
   const [effectsDirty, setEffectsDirty] = useState(false);
   const [defaultEngine, setDefaultEngine] = useState<string>('');
+  const [rvcModelFile, setRvcModelFile] = useState<File | null>(null);
+  const [rvcIndexFile, setRvcIndexFile] = useState<File | null>(null);
+  const [rvcUploadFraction, setRvcUploadFraction] = useState<number | null>(null);
+  const [rvcUploadError, setRvcUploadError] = useState<string | null>(null);
+  // TTS->RVC chain settings (base voice + conversion knobs) for rvc profiles.
+  const [rvcBaseVoice, setRvcBaseVoice] = useState<string>(DEFAULT_RVC_BASE_VOICE);
+  const [rvcParams, setRvcParams] = useState<Required<RvcConvertParams>>(RVC_DEFAULTS);
+  // False while the RVC base-voice list is still loading/errored — gates Save so
+  // we never persist a half-resolved `"{engine}:"` base voice.
+  const [rvcBaseVoiceReady, setRvcBaseVoiceReady] = useState(false);
 
   const form = useForm<ProfileFormValues>({
     resolver: zodResolver(makeProfileSchema(t)),
@@ -342,6 +357,10 @@ export function ProfileForm() {
       setProfileEffectsChain(editingProfile.effects_chain ?? []);
       setEffectsDirty(false);
       setDefaultEngine(editingProfile.default_engine ?? '');
+      if (editingProfile.voice_type === 'rvc') {
+        setRvcBaseVoice(editingProfile.rvc_base_voice || DEFAULT_RVC_BASE_VOICE);
+        setRvcParams({ ...RVC_DEFAULTS, ...(editingProfile.rvc_params ?? {}) });
+      }
     } else if (profileFormDraft && open) {
       // Restore from draft when opening in create mode
       form.reset({
@@ -380,6 +399,12 @@ export function ProfileForm() {
       });
       setSampleMode('record');
       setAvatarPreview(null);
+      setVoiceSource('clone');
+      setRvcModelFile(null);
+      setRvcIndexFile(null);
+      setRvcUploadError(null);
+      setRvcBaseVoice(DEFAULT_RVC_BASE_VOICE);
+      setRvcParams(RVC_DEFAULTS);
     }
   }, [editingProfile, profileFormDraft, open, form]);
 
@@ -500,6 +525,10 @@ export function ProfileForm() {
             language: data.language,
             default_engine: defaultEngine || undefined,
             personality: data.personality?.trim() ? data.personality.trim() : undefined,
+            // Chain settings are applied server-side only for rvc profiles.
+            ...(editingProfile?.voice_type === 'rvc'
+              ? { rvc_base_voice: rvcBaseVoice, rvc_params: rvcParams }
+              : {}),
           },
         });
 
@@ -590,6 +619,93 @@ export function ProfileForm() {
         toast({
           title: t('profileForm.toast.profileCreated'),
           description: t('profileForm.toast.profileCreatedBuiltin', { name: data.name }),
+        });
+      } else if (voiceSource === 'rvc') {
+        // Creating rvc profile: the model upload endpoint needs a profile id,
+        // so create the row first, then upload the checkpoint.
+        if (!rvcModelFile) {
+          setRvcUploadError(t('profileForm.rvc.validation.modelRequired'));
+          toast({
+            title: t('profileForm.rvc.toast.uploadFailed'),
+            description: t('profileForm.rvc.validation.modelRequired'),
+            variant: 'destructive',
+          });
+          return;
+        }
+
+        setRvcUploadError(null);
+        const profile = await createProfile.mutateAsync({
+          name: data.name,
+          description: data.description,
+          language: data.language,
+          voice_type: 'rvc' as VoiceType,
+          personality: data.personality?.trim() ? data.personality.trim() : undefined,
+          rvc_base_voice: rvcBaseVoice,
+          rvc_params: rvcParams,
+        });
+
+        try {
+          setRvcUploadFraction(0);
+          await uploadRvcModel.mutateAsync({
+            profileId: profile.id,
+            modelFile: rvcModelFile,
+            indexFile: rvcIndexFile ?? undefined,
+            onProgress: (p) => setRvcUploadFraction(p.fraction),
+          });
+        } catch (uploadError) {
+          const message =
+            uploadError instanceof Error
+              ? uploadError.message
+              : t('profileForm.rvc.toast.uploadFailed');
+          setRvcUploadError(message);
+          let rollbackSucceeded = false;
+          try {
+            await deleteProfile.mutateAsync(profile.id);
+            rollbackSucceeded = true;
+          } catch (rollbackError) {
+            toast({
+              title: t('profileForm.toast.rollbackFailed'),
+              description:
+                rollbackError instanceof Error
+                  ? rollbackError.message
+                  : t('profileForm.toast.rollbackFailedDescription'),
+              variant: 'destructive',
+            });
+          }
+          toast({
+            title: t('profileForm.rvc.toast.uploadFailed'),
+            description: rollbackSucceeded
+              ? `${message} ${t('profileForm.toast.profileRolledBack')}`
+              : message,
+            variant: 'destructive',
+          });
+          return;
+        } finally {
+          setRvcUploadFraction(null);
+        }
+
+        // Handle avatar upload if provided (non-fatal).
+        if (data.avatarFile) {
+          try {
+            await uploadAvatar.mutateAsync({
+              profileId: profile.id,
+              file: data.avatarFile,
+            });
+          } catch (avatarError) {
+            toast({
+              title: t('profileForm.toast.avatarUploadFailed'),
+              description:
+                avatarError instanceof Error
+                  ? avatarError.message
+                  : t('profileForm.toast.avatarUploadFailedFallback'),
+              variant: 'destructive',
+            });
+          }
+        }
+
+        toast({
+          title: t('profileForm.toast.profileCreated'),
+          description: t('profileForm.rvc.toast.profileCreated', { name: data.name }),
         });
       } else {
         // Creating cloned profile: require sample file and reference text
@@ -742,6 +858,9 @@ export function ProfileForm() {
       // Clear draft and reset form on success
       setProfileFormDraft(null);
       form.reset();
+      setRvcModelFile(null);
+      setRvcIndexFile(null);
+      setRvcUploadError(null);
       setEditingProfileId(null);
       setOpen(false);
     } catch (error) {
@@ -877,6 +996,18 @@ export function ProfileForm() {
                             <Music className="h-3.5 w-3.5" />
                             {t('profileForm.source.builtin')}
                           </button>
+                          <button
+                            type="button"
+                            onClick={() => setVoiceSource('rvc')}
+                            className={`inline-flex items-center gap-2 px-3 py-1.5 text-sm rounded-md transition-colors ${
+                              voiceSource === 'rvc'
+                                ? 'bg-accent text-accent-foreground shadow-sm'
+                                : 'text-muted-foreground hover:text-foreground'
+                            }`}
+                          >
+                            <Waves className="h-3.5 w-3.5" />
+                            {t('profileForm.source.rvc')}
+                          </button>
                         </div>
                       </div>
 
@@ -898,6 +1029,7 @@ export function ProfileForm() {
                               <SelectContent>
                                 <SelectItem value="kokoro">Kokoro 82M</SelectItem>
                                 <SelectItem value="qwen_custom_voice">Qwen CustomVoice</SelectItem>
+                                <SelectItem value="voxtral">Voxtral 4B TTS</SelectItem>
                               </SelectContent>
                             </Select>
                           </FormItem>
@@ -936,6 +1068,30 @@ export function ProfileForm() {
                               ))}
                             </div>
                           </FormItem>
+                        </div>
+                      ) : voiceSource === 'rvc' ? (
+                        <div className="space-y-4">
+                          <RvcModelPicker
+                            modelFile={rvcModelFile}
+                            indexFile={rvcIndexFile}
+                            onModelFileChange={(file) => {
+                              setRvcModelFile(file);
+                              setRvcUploadError(null);
+                            }}
+                            onIndexFileChange={setRvcIndexFile}
+                            uploadFraction={rvcUploadFraction}
+                            uploadError={rvcUploadError}
+                            disabled={createProfile.isPending || uploadRvcModel.isPending}
+                          />
+                          <RvcChainSettings
+                            baseVoice={rvcBaseVoice}
+                            params={rvcParams}
+                            hasIndex={!!rvcIndexFile}
+                            onBaseVoiceChange={setRvcBaseVoice}
+                            onParamsChange={setRvcParams}
+                            onValidityChange={setRvcBaseVoiceReady}
+                            disabled={createProfile.isPending || uploadRvcModel.isPending}
+                          />
                         </div>
                       ) : (
                         <>
@@ -1100,6 +1256,20 @@ export function ProfileForm() {
                         <p className="text-xs text-muted-foreground">
                           {t('profileForm.builtin.note')}
                         </p>
+                      </div>
+                    ) : editingProfile.voice_type === 'rvc' ? (
+                      <div className="space-y-4">
+                        <RvcModelManager profile={editingProfile} />
+                        <RvcChainSettings
+                          baseVoice={rvcBaseVoice}
+                          params={rvcParams}
+                          // Index presence is no longer exposed by the profile
+                          // API (only rvc_has_model); keep index-rate usable.
+                          hasIndex={true}
+                          onBaseVoiceChange={setRvcBaseVoice}
+                          onParamsChange={setRvcParams}
+                          onValidityChange={setRvcBaseVoiceReady}
+                        />
                       </div>
                     ) : (
                       <div>
@@ -1298,7 +1468,12 @@ export function ProfileForm() {
                 <Button
                   type="submit"
                   disabled={
-                    createProfile.isPending || updateProfile.isPending || addSample.isPending
+                    createProfile.isPending ||
+                    updateProfile.isPending ||
+                    addSample.isPending ||
+                    // Block Save until the RVC base voice resolves to a real id.
+                    ((voiceSource === 'rvc' || editingProfile?.voice_type === 'rvc') &&
+                      !rvcBaseVoiceReady)
                   }
                 >
                   {createProfile.isPending || updateProfile.isPending || addSample.isPending

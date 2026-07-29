@@ -24,6 +24,7 @@ import {
 } from '@/components/ui/select';
 import { Textarea } from '@/components/ui/textarea';
 import { useToast } from '@/components/ui/use-toast';
+import { RvcModelManager } from '@/components/VoiceProfiles/RvcModelPanel';
 import { SampleList } from '@/components/VoiceProfiles/SampleList';
 import { apiClient } from '@/lib/api/client';
 import type { EffectConfig } from '@/lib/api/types';
@@ -347,9 +348,13 @@ export function VoiceInspector({ profileId }: VoiceInspectorProps) {
               )}
             </div>
 
-            {/* Samples */}
+            {/* Samples (or RVC model management for rvc profiles) */}
             <div className="px-5 pb-5">
-              <SampleList profileId={profileId} />
+              {profile.voice_type === 'rvc' ? (
+                <RvcModelManager profile={profile} />
+              ) : (
+                <SampleList profileId={profileId} />
+              )}
             </div>
           </form>
         </Form>
