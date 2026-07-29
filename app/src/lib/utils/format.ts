@@ -60,6 +60,7 @@ const ENGINE_DISPLAY_NAMES: Record<string, string> = {
   luxtts: 'LuxTTS',
   chatterbox: 'Chatterbox',
   chatterbox_turbo: 'Chatterbox Turbo',
+  voxtral: 'Voxtral',
 };
 
 export function formatEngineName(engine?: string, modelSize?: string): string {

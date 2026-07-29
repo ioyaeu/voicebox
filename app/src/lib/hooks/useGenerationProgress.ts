@@ -2,13 +2,14 @@ import { useQueryClient } from '@tanstack/react-query';
 import { useEffect, useRef } from 'react';
 import { useToast } from '@/components/ui/use-toast';
 import { apiClient } from '@/lib/api/client';
+import type { GenerationResponse, HistoryListResponse } from '@/lib/api/types';
 import { useGenerationSettings } from '@/lib/hooks/useSettings';
 import { useGenerationStore } from '@/stores/generationStore';
 import { usePlayerStore } from '@/stores/playerStore';
 
 interface GenerationStatusEvent {
   id: string;
-  status: 'loading_model' | 'generating' | 'completed' | 'failed' | 'not_found';
+  status: 'loading_model' | 'generating' | 'converting' | 'completed' | 'failed' | 'not_found';
   duration?: number;
   error?: string;
   source?: string;
@@ -135,6 +136,40 @@ export function useGenerationProgress() {
               title: data.status === 'not_found' ? 'Generation not found' : 'Generation failed',
               description: data.error || 'An error occurred during generation',
               variant: 'destructive',
+            });
+          } else {
+            // Non-terminal stage (loading_model | generating | converting). The
+            // SSE re-sends the current status ~every second, but the history
+            // list is only (re)fetched at submit and completion — so without
+            // this the row's stage label freezes on whatever status the
+            // post-submit fetch happened to catch (e.g. stuck on "Loading
+            // model..." for the whole of a long TTS->RVC job). Patch the cached
+            // history entries in place so the label tracks the live stage with
+            // no extra network round-trip. The updater returns the SAME
+            // reference when nothing changed, so the ~1s repeats of an
+            // unchanged status are no-ops (no re-render).
+            const nextStatus = data.status;
+            queryClient.setQueriesData<unknown>({ queryKey: ['history'] }, (old: unknown) => {
+              if (!old || typeof old !== 'object') return old;
+              // List cache: { items: HistoryResponse[], total }
+              if ('items' in old && Array.isArray((old as HistoryListResponse).items)) {
+                const list = old as HistoryListResponse;
+                let changed = false;
+                const items = list.items.map((item) => {
+                  if (item.id === id && item.status !== nextStatus) {
+                    changed = true;
+                    return { ...item, status: nextStatus };
+                  }
+                  return item;
+                });
+                return changed ? { ...list, items } : old;
+              }
+              // Single-generation detail cache: GenerationResponse
+              const gen = old as GenerationResponse;
+              if (gen.id === id && gen.status !== nextStatus) {
+                return { ...gen, status: nextStatus };
+              }
+              return old;
             });
           }
         } catch {

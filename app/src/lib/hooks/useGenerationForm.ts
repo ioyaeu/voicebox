@@ -27,6 +27,7 @@ const generationSchema = z.object({
       'chatterbox_turbo',
       'tada',
       'kokoro',
+      'voxtral',
     ])
     .optional(),
   personality: z.boolean().optional(),
@@ -34,10 +35,41 @@ const generationSchema = z.object({
 
 export type GenerationFormValues = z.infer<typeof generationSchema>;
 
+/**
+ * Maps an RVC chain base voice's engine to the downloadable base TTS model, so
+ * an RVC generation can show the same base-model download dialog a plain TTS
+ * generation would (the chain speaks the text with this base voice first). The
+ * backend resolves the authoritative model/size at run time; this drives the
+ * client-side download toast for the common base engines.
+ */
+function resolveRvcBaseModel(
+  baseEngine: string,
+  modelSize: GenerationFormValues['modelSize'],
+): { modelName: string; displayName: string } | null {
+  if (baseEngine === 'kokoro') {
+    return { modelName: 'kokoro', displayName: 'Kokoro 82M' };
+  }
+  if (baseEngine === 'voxtral') {
+    return { modelName: 'voxtral-4b-tts-4bit', displayName: 'Voxtral 4B TTS' };
+  }
+  if (baseEngine === 'qwen_custom_voice') {
+    const size = modelSize === '0.6B' ? '0.6B' : '1.7B';
+    return {
+      modelName: `qwen-custom-voice-${size}`,
+      displayName: `Qwen CustomVoice ${size}`,
+    };
+  }
+  return null;
+}
+
 interface UseGenerationFormOptions {
   onSuccess?: (generationId: string) => void;
   defaultValues?: Partial<GenerationFormValues>;
   getEffectsChain?: () => EffectConfig[] | undefined;
+  /** When the selected profile is an rvc voice, send engine=null so the backend
+   *  resolves the TTS→RVC chain — the profile owns the base engine, and "rvc"
+   *  is not a valid TTS engine on the request. */
+  isRvcProfile?: boolean;
 }
 
 export function useGenerationForm(options: UseGenerationFormOptions = {}) {
@@ -86,55 +118,84 @@ export function useGenerationForm(options: UseGenerationFormOptions = {}) {
     }
 
     try {
+      // RVC profiles resolve their base engine server-side; the request sends
+      // engine=null. The base voice's TTS model still needs downloading, so we
+      // surface the normal download dialog for it below rather than skipping it.
+      const isRvc = options.isRvcProfile === true;
       const engine = data.engine || 'qwen';
-      const modelName =
-        engine === 'luxtts'
-          ? 'luxtts'
-          : engine === 'chatterbox'
-            ? 'chatterbox-tts'
-            : engine === 'chatterbox_turbo'
-              ? 'chatterbox-turbo'
-              : engine === 'tada'
-                ? data.modelSize === '3B'
-                  ? 'tada-3b-ml'
-                  : 'tada-1b'
-                : engine === 'kokoro'
-                  ? 'kokoro'
-                  : engine === 'qwen_custom_voice'
-                    ? `qwen-custom-voice-${data.modelSize}`
-                    : `qwen-tts-${data.modelSize}`;
-      const displayName =
-        engine === 'luxtts'
-          ? 'LuxTTS'
-          : engine === 'chatterbox'
-            ? 'Chatterbox TTS'
-            : engine === 'chatterbox_turbo'
-              ? 'Chatterbox Turbo'
-              : engine === 'tada'
-                ? data.modelSize === '3B'
-                  ? 'TADA 3B Multilingual'
-                  : 'TADA 1B'
-                : engine === 'kokoro'
-                  ? 'Kokoro 82M'
-                  : engine === 'qwen_custom_voice'
-                    ? data.modelSize === '1.7B'
-                      ? 'Qwen CustomVoice 1.7B'
-                      : 'Qwen CustomVoice 0.6B'
-                    : data.modelSize === '1.7B'
-                      ? 'Qwen TTS 1.7B'
-                      : 'Qwen TTS 0.6B';
 
-      // Check if model needs downloading
-      try {
-        const modelStatus = await apiClient.getModelStatus();
-        const model = modelStatus.models.find((m) => m.model_name === modelName);
+      if (!isRvc) {
+        const modelName =
+          engine === 'luxtts'
+            ? 'luxtts'
+            : engine === 'chatterbox'
+              ? 'chatterbox-tts'
+              : engine === 'chatterbox_turbo'
+                ? 'chatterbox-turbo'
+                : engine === 'tada'
+                  ? data.modelSize === '3B'
+                    ? 'tada-3b-ml'
+                    : 'tada-1b'
+                  : engine === 'kokoro'
+                    ? 'kokoro'
+                    : engine === 'voxtral'
+                      ? 'voxtral-4b-tts-4bit'
+                      : engine === 'qwen_custom_voice'
+                        ? `qwen-custom-voice-${data.modelSize}`
+                        : `qwen-tts-${data.modelSize}`;
+        const displayName =
+          engine === 'luxtts'
+            ? 'LuxTTS'
+            : engine === 'chatterbox'
+              ? 'Chatterbox TTS'
+              : engine === 'chatterbox_turbo'
+                ? 'Chatterbox Turbo'
+                : engine === 'tada'
+                  ? data.modelSize === '3B'
+                    ? 'TADA 3B Multilingual'
+                    : 'TADA 1B'
+                  : engine === 'kokoro'
+                    ? 'Kokoro 82M'
+                    : engine === 'voxtral'
+                      ? 'Voxtral 4B TTS'
+                      : engine === 'qwen_custom_voice'
+                        ? data.modelSize === '1.7B'
+                          ? 'Qwen CustomVoice 1.7B'
+                          : 'Qwen CustomVoice 0.6B'
+                        : data.modelSize === '1.7B'
+                          ? 'Qwen TTS 1.7B'
+                          : 'Qwen TTS 0.6B';
 
-        if (model && !model.downloaded) {
-          setDownloadingModelName(modelName);
-          setDownloadingDisplayName(displayName);
+        // Check if model needs downloading
+        try {
+          const modelStatus = await apiClient.getModelStatus();
+          const model = modelStatus.models.find((m) => m.model_name === modelName);
+
+          if (model && !model.downloaded) {
+            setDownloadingModelName(modelName);
+            setDownloadingDisplayName(displayName);
+          }
+        } catch (error) {
+          console.error('Failed to check model status:', error);
         }
-      } catch (error) {
-        console.error('Failed to check model status:', error);
+      } else {
+        // RVC: resolve the chain's base TTS model from the profile's base voice
+        // and show the same download dialog if it isn't present yet.
+        try {
+          const profile = await apiClient.getProfile(selectedProfileId);
+          const baseEngine = profile.rvc_base_voice?.split(':')[0] || 'kokoro';
+          const base = resolveRvcBaseModel(baseEngine, data.modelSize);
+          if (base) {
+            const modelStatus = await apiClient.getModelStatus();
+            const model = modelStatus.models.find((m) => m.model_name === base.modelName);
+            if (model && !model.downloaded) {
+              setDownloadingModelName(base.modelName);
+              setDownloadingDisplayName(base.displayName);
+            }
+          }
+        } catch (error) {
+          console.error('Failed to check RVC base model status:', error);
+        }
       }
 
       const hasModelSizes =
@@ -149,9 +210,10 @@ export function useGenerationForm(options: UseGenerationFormOptions = {}) {
         text: data.text,
         language: data.language,
         seed: data.seed,
-        model_size: hasModelSizes ? data.modelSize : undefined,
-        engine,
-        instruct: supportsInstruct ? data.instruct || undefined : undefined,
+        model_size: isRvc ? undefined : hasModelSizes ? data.modelSize : undefined,
+        // null defers the engine choice to the profile (rvc TTS→RVC chain).
+        engine: isRvc ? null : engine,
+        instruct: isRvc ? undefined : supportsInstruct ? data.instruct || undefined : undefined,
         personality: data.personality || undefined,
         max_chunk_chars: maxChunkChars,
         crossfade_ms: crossfadeMs,

@@ -20,6 +20,7 @@
     "audio": "音频",
     "models": "模型",
     "settings": "设置",
+    "voiceChanger": "变声器",
     "updateBadge": "更新"
   },
   "captures": {
@@ -243,12 +244,78 @@
     "discard": "丢弃",
     "source": {
       "clone": "从音频克隆",
-      "builtin": "内置声音"
+      "builtin": "内置声音",
+      "rvc": "RVC 模型"
     },
     "builtin": {
       "hint": "选择一个预建的声音。这些不需要音频样本。",
       "badge": "内置声音",
       "note": "此档案使用内置声音。创建后声音无法更改。"
+    },
+    "rvc": {
+      "createHint": "上传训练好的 RVC 模型,即可将任意录音转换为该声音。特征索引为可选项,但可提升音色相似度。",
+      "modelLabel": "声音模型(.pth)",
+      "modelHint": "必填。训练好的 RVC 生成器检查点。",
+      "indexLabel": "特征索引(.index)",
+      "indexHint": "可选。可在转换时提升音色相似度。",
+      "chooseModel": "选择 .pth 文件",
+      "chooseIndex": "选择 .index 文件",
+      "remove": "移除文件",
+      "noModel": "尚未上传模型。添加 .pth 检查点以启用转换。",
+      "modelReady": "模型就绪",
+      "upload": "上传模型",
+      "uploadingShort": "上传中…",
+      "uploading": "上传中… {{percent}}%",
+      "validating": "验证中…",
+      "replace": "替换模型",
+      "delete": "删除模型",
+      "deleting": "删除中…",
+      "deleteDialog": {
+        "title": "移除 RVC 模型？",
+        "description": "这将永久删除为此声音上传的模型和特征索引，且无法撤销。"
+      },
+      "metadata": {
+        "title": "模型详情",
+        "version": "版本",
+        "sampleRate": "采样率",
+        "sampleRateValue": "{{value}} Hz",
+        "f0": "音高模型",
+        "f0Yes": "是",
+        "f0No": "否",
+        "index": "特征索引",
+        "indexPresent": "已提供",
+        "indexAbsent": "无"
+      },
+      "validation": {
+        "modelRequired": "需要一个 .pth 模型文件。",
+        "modelExtension": "声音模型必须是 .pth 文件。",
+        "indexExtension": "特征索引必须是 .index 文件。"
+      },
+      "toast": {
+        "profileCreated": "\"{{name}}\" 已使用 RVC 模型创建。",
+        "modelUploaded": "模型已上传",
+        "modelUploadedDescription": "已验证并保存 RVC 检查点。",
+        "modelDeleted": "模型已移除",
+        "uploadFailed": "模型上传失败",
+        "deleteFailed": "移除模型失败"
+      },
+      "chain": {
+        "title": "基础声音与转换",
+        "hint": "文本先用此基础声音朗读，然后转换为你的 RVC 声音。",
+        "baseEngine": "基础引擎",
+        "baseVoice": "基础声音",
+        "baseVoicePlaceholder": "选择声音…",
+        "baseSource": "基础来源",
+        "baseProfilePlaceholder": "选择档案…",
+        "profileSource": "Voicebox 档案",
+        "coverageHint": "需要预设不支持的语言（例如俄语）？在上方选择“Voicebox 档案”，并使用一个克隆档案作为基础。",
+        "noProfiles": "还没有非 RVC 档案。请先创建克隆、预设或设计声音，再将其用作基础。",
+        "profileType": {
+          "cloned": "克隆",
+          "preset": "预设",
+          "designed": "设计"
+        }
+      }
     },
     "sampleTabs": {
       "upload": "上传",
@@ -396,6 +463,7 @@
     "card": {
       "noDescription": "无描述",
       "designed": "设计",
+      "rvc": "RVC",
       "export": "导出声音档案",
       "edit": "编辑声音档案",
       "delete": "删除声音档案",
@@ -700,6 +768,7 @@
       "tooltip": "传达说明 (语气、情感、节奏)",
       "placeholder": "传达说明——例如:温柔缓慢地说、威严清晰…"
     },
+    "rvcBaseVoice": "RVC 声音",
     "voiceSelector": {
       "placeholder": "选择声音…"
     },
@@ -1236,6 +1305,117 @@
       "migrationFailed": "迁移失败",
       "migrationFailedGeneric": "迁移模型失败",
       "migrationConnectionLost": "迁移期间丢失连接"
+    }
+  },
+  "voiceChanger": {
+    "title": "变声器",
+    "description": "将录音转换为你的某个 RVC 声音。",
+    "mode": {
+      "file": "文件",
+      "realtime": "实时",
+      "realtimeComingSoon": "实时转换即将推出。"
+    },
+    "empty": {
+      "title": "还没有带模型的 RVC 声音",
+      "description": "创建一个 RVC 声音配置并上传 .pth 模型，即可开始转换录音。",
+      "cta": "前往声音"
+    },
+    "loadError": {
+      "title": "无法加载声音",
+      "description": "加载语音配置时出错。请确认后端正在运行，然后重试。"
+    },
+    "source": {
+      "title": "源音频",
+      "dropTitle": "拖入音频文件或点击浏览",
+      "dropHint": "WAV、MP3、FLAC、M4A 等常见格式",
+      "clear": "移除文件",
+      "invalidFile": "该文件不是受支持的音频格式。"
+    },
+    "profile": {
+      "title": "目标声音",
+      "label": "RVC 声音配置",
+      "placeholder": "选择声音"
+    },
+    "params": {
+      "title": "转换设置",
+      "advanced": "高级",
+      "pitch": {
+        "label": "音高偏移",
+        "value": "{{value}} 半音",
+        "hint": "以半音为单位调整音高。男声转女声可尝试 +12，女声转男声可尝试 -12。"
+      },
+      "f0Method": {
+        "label": "音高估计器",
+        "rmvpe": "RMVPE（推荐）",
+        "crepe": "CREPE",
+        "hint": "RMVPE 快速且稳健。CREPE 在干净人声上可能更平滑。"
+      },
+      "indexRate": {
+        "label": "索引强度",
+        "hint": "特征索引影响音色的强度。",
+        "noIndex": "该声音没有特征索引，索引强度不起作用。"
+      },
+      "rmsMixRate": {
+        "label": "音量包络",
+        "hint": "0 保留源音量，1 模仿目标声音的音量。"
+      },
+      "protect": {
+        "label": "辅音保护",
+        "hint": "较高的值可保护气息和辅音免受杂音影响。"
+      }
+    },
+    "convert": {
+      "action": "转换",
+      "starting": "正在开始…",
+      "inProgress": "正在转换…",
+      "loadingModel": "正在加载模型…",
+      "failed": "转换失败"
+    },
+    "result": {
+      "title": "转换完成",
+      "play": "播放",
+      "download": "下载",
+      "downloading": "正在下载…"
+    },
+    "realtime": {
+      "start": "开始转换",
+      "stop": "停止",
+      "connecting": "连接中…",
+      "devices": {
+        "title": "音频设备",
+        "input": "输入（麦克风）",
+        "output": "输出设备",
+        "systemDefault": "系统默认",
+        "outputUnsupported": "当前环境不支持选择输出设备；音频将播放到系统默认设备。",
+        "permissionHint": "授予麦克风权限后即可显示设备名称。",
+        "grantAccess": "列出音频设备",
+        "persistedSinkMissing": "已保存的输出设备不在当前列表中。它可能已被拔出，或名称尚未加载——请授予麦克风权限以刷新列表。你的选择会被保留。",
+        "outputRouteFailed": "无法将音频路由到“{{device}}”。转换后的语音没有发送到该设备，因此 Discord 等应用将无法接收，播放已暂停。请选择其他输出设备或切换到系统默认。"
+      },
+      "monitor": {
+        "title": "监听",
+        "label": "听到自己",
+        "hint": "默认关闭。开启后可通过本地输出监听转换后的声音。",
+        "warning": "请使用耳机。麦克风开启时通过扬声器监听会产生啸叫。"
+      },
+      "meters": {
+        "input": "输入",
+        "output": "输出",
+        "latency": "延迟",
+        "latencyValue": "约 {{ms}} ms",
+        "bufferedValue": "缓冲 {{ms}} ms"
+      },
+      "overload": "实时处理跟不上（推理 {{ms}} ms/块）。请尝试更小的模型或更快的设备，否则可能出现卡顿。",
+      "virtual": {
+        "title": "路由到虚拟音频设备",
+        "description": "若要把转换后的声音送入 Discord、游戏或通话，请安装虚拟音频线（{{name}}）。Voicebox 不附带该驱动。",
+        "step1": "安装 {{name}}，如有提示请重启电脑。",
+        "step2": "在上方将输出设备设置为 {{name}}。",
+        "step3": "在 Discord 或你的应用中，选择 {{name}} 作为麦克风。",
+        "install": "安装 {{name}}",
+        "blackhole": "BlackHole 2ch",
+        "vbcable": "VB-CABLE"
+      }
     }
   }
 }

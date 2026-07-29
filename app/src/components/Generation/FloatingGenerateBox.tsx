@@ -1,7 +1,7 @@
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { useMatchRoute } from '@tanstack/react-router';
 import { AnimatePresence, motion } from 'framer-motion';
-import { Dices, Loader2, SlidersHorizontal, Sparkles, Wand2 } from 'lucide-react';
+import { Dices, Loader2, SlidersHorizontal, Sparkles, Wand2, Waves } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Button } from '@/components/ui/button';
@@ -78,7 +78,12 @@ export function FloatingGenerateBox({
   // Calculate if track editor is visible (on stories route with items)
   const hasTrackEditor = isStoriesRoute && currentStory && currentStory.items.length > 0;
 
+  // RVC profiles own their base TTS engine server-side; the generation request
+  // sends engine=null so the backend resolves the chain (see useGenerationForm).
+  const isRvcProfile = selectedProfile?.voice_type === 'rvc';
+
   const { form, handleSubmit, isPending } = useGenerationForm({
+    isRvcProfile,
     onSuccess: async (generationId) => {
       setIsExpanded(false);
       // Defer the story add until TTS completes -- useGenerationProgress handles it
@@ -151,21 +156,34 @@ export function FloatingGenerateBox({
     | 'chatterbox_turbo'
     | 'tada'
     | 'kokoro'
+    | 'voxtral'
     | 'qwen_custom_voice';
   useEffect(() => {
     if (selectedProfile?.language) {
       form.setValue('language', selectedProfile.language as LanguageCode);
     }
-    // Auto-switch engine to match the profile
-    const engine = selectedProfile?.default_engine ?? selectedProfile?.preset_engine;
-    if (engine) {
-      form.setValue('engine', engine as EngineValue);
-    } else if (selectedProfile && selectedProfile.voice_type !== 'preset') {
-      // Cloned/designed profile with no default — ensure a compatible (non-preset) engine
+    // Auto-switch engine to match the profile.
+    if (selectedProfile?.voice_type === 'rvc') {
+      // RVC owns its base engine server-side (the request sends engine=null and
+      // "rvc" isn't a valid form engine). Keep a non-preset TTS engine selected
+      // so the form stays valid and the profile picker treats rvc voices as
+      // supported.
       const currentEngine = form.getValues('engine');
-      const presetEngines = new Set(['kokoro', 'qwen_custom_voice']);
-      if (currentEngine && presetEngines.has(currentEngine)) {
+      const presetEngines = new Set(['kokoro', 'qwen_custom_voice', 'voxtral']);
+      if (!currentEngine || presetEngines.has(currentEngine)) {
         form.setValue('engine', 'qwen');
+      }
+    } else if (selectedProfile) {
+      const engine = selectedProfile.default_engine ?? selectedProfile.preset_engine;
+      if (engine) {
+        form.setValue('engine', engine as EngineValue);
+      } else if (selectedProfile.voice_type !== 'preset') {
+        // Cloned/designed profile with no default — ensure a compatible (non-preset) engine
+        const currentEngine = form.getValues('engine');
+        const presetEngines = new Set(['kokoro', 'qwen_custom_voice', 'voxtral']);
+        if (currentEngine && presetEngines.has(currentEngine)) {
+          form.setValue('engine', 'qwen');
+        }
       }
     }
     // Pre-fill effects from profile defaults
@@ -571,9 +589,12 @@ export function FloatingGenerateBox({
                     control={form.control}
                     name="language"
                     render={({ field }) => {
-                      const engineLangs = getLanguageOptionsForEngine(
-                        form.watch('engine') || 'qwen',
-                      );
+                      // For rvc profiles the languages come from the base engine
+                      // (the profile's rvc_base_voice), not the hidden form engine.
+                      const langEngine = isRvcProfile
+                        ? selectedProfile?.rvc_base_voice?.split(':')[0] || 'kokoro'
+                        : form.watch('engine') || 'qwen';
+                      const engineLangs = getLanguageOptionsForEngine(langEngine);
                       return (
                         <FormItem className="flex-1 space-y-0">
                           <Select onValueChange={field.onChange} value={field.value}>
@@ -597,7 +618,16 @@ export function FloatingGenerateBox({
                   />
 
                   <FormItem className="flex-1 space-y-0">
-                    <EngineModelSelector form={form} compact />
+                    {isRvcProfile ? (
+                      // The base engine is owned by the profile — not a
+                      // generation-time choice — so show it read-only.
+                      <div className="flex h-8 items-center gap-1.5 rounded-full border border-border bg-card px-3 text-xs text-muted-foreground">
+                        <Waves className="h-3.5 w-3.5 shrink-0 text-accent" />
+                        <span className="truncate">{t('generation.rvcBaseVoice')}</span>
+                      </div>
+                    ) : (
+                      <EngineModelSelector form={form} compact />
+                    )}
                   </FormItem>
 
                   <FormItem className="flex-1 space-y-0">

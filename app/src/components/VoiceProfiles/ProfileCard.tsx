@@ -22,6 +22,7 @@ import { useUIStore } from '@/stores/uiStore';
 const ENGINE_DISPLAY_NAMES: Record<string, string> = {
   kokoro: 'Kokoro',
   qwen_custom_voice: 'CustomVoice',
+  voxtral: 'Voxtral',
 };
 
 interface ProfileCardProps {
@@ -121,6 +122,11 @@ export function ProfileCard({ profile, disabled }: ProfileCardProps) {
             {profile.voice_type === 'designed' && (
               <Badge variant="secondary" className="text-xs h-5 px-1.5">
                 {t('profiles.card.designed')}
+              </Badge>
+            )}
+            {profile.voice_type === 'rvc' && (
+              <Badge variant="secondary" className="text-xs h-5 px-1.5">
+                {t('profiles.card.rvc')}
               </Badge>
             )}
             {profile.effects_chain && profile.effects_chain.length > 0 && (

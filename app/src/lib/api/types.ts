@@ -1,7 +1,7 @@
 // API Types matching backend Pydantic models
 import type { LanguageCode } from '@/lib/constants/languages';
 
-export type VoiceType = 'cloned' | 'preset' | 'designed';
+export type VoiceType = 'cloned' | 'preset' | 'designed' | 'rvc';
 
 export interface VoiceProfileCreate {
   name: string;
@@ -14,6 +14,10 @@ export interface VoiceProfileCreate {
   default_engine?: string;
   /** Free-form character prompt used by compose and the `/generate` personality-rewrite path. */
   personality?: string;
+  /** RVC chain: base preset voice as `"{engine}:{voice_id}"` (rvc profiles only). Defaults server-side. */
+  rvc_base_voice?: string;
+  /** RVC chain: conversion knobs (rvc profiles only). Defaults server-side. */
+  rvc_params?: RvcConvertParams;
 }
 
 export interface VoiceProfileResponse {
@@ -28,6 +32,17 @@ export interface VoiceProfileResponse {
   preset_voice_id?: string;
   design_prompt?: string;
   default_engine?: string;
+  /** True when this `rvc` profile has a validated `.pth` model on disk. The
+   *  storage paths themselves stay server-internal and are never exposed. */
+  rvc_has_model?: boolean;
+  /** Checkpoint metadata read from the profile's rvc_model.json sidecar. */
+  rvc_version?: string | null;
+  rvc_sample_rate?: number | null;
+  rvc_f0?: number | null;
+  /** TTS→RVC chain base voice (`"{engine}:{voice_id}"`) — populated with a default for rvc profiles. */
+  rvc_base_voice?: string | null;
+  /** TTS→RVC chain conversion knobs — populated with defaults for rvc profiles. */
+  rvc_params?: RvcConvertParams | null;
   personality?: string | null;
   generation_count: number;
   sample_count: number;
@@ -78,7 +93,11 @@ export interface GenerationRequest {
     | 'chatterbox'
     | 'chatterbox_turbo'
     | 'tada'
-    | 'kokoro';
+    | 'kokoro'
+    | 'voxtral'
+    // `null` explicitly defers engine choice to the profile — the backend
+    // resolves the base engine server-side for rvc profiles (TTS→RVC chain).
+    | null;
   instruct?: string;
   /** When true and the profile has a personality prompt, input text is rewritten in-character before TTS. */
   personality?: boolean;
@@ -110,7 +129,7 @@ export interface GenerationResponse {
   instruct?: string;
   engine?: string;
   model_size?: string;
-  status: 'loading_model' | 'generating' | 'completed' | 'failed';
+  status: 'loading_model' | 'generating' | 'converting' | 'completed' | 'failed';
   error?: string;
   is_favorited?: boolean;
   created_at: string;
@@ -269,7 +288,7 @@ export interface HealthResponse {
   gpu_type?: string;
   vram_used_mb?: number;
   backend_type?: string;
-  backend_variant?: string; // "cpu", "cuda", or "rocm"
+  backend_variant?: string; // "cpu", "cuda", "rocm", "xpu", or "metal"
   supports_rocm?: boolean; // AMD GPU on Windows — the ROCm backend is applicable
 }
 
@@ -559,4 +578,46 @@ export interface CloudStatus {
   key_prefix: string | null;
   connected_at: string | null;
   dashboard_url: string;
+}
+
+/* ─── RVC voice conversion ────────────────────────────────────────────── */
+
+/** Progress payload for multipart uploads driven through XHR. */
+export interface UploadProgress {
+  loaded: number;
+  total: number;
+  /** 0..1 upload fraction; 0 while total length is not yet computable. */
+  fraction: number;
+}
+
+export type RvcF0Method = 'rmvpe' | 'crepe';
+
+/**
+ * Non-file form parameters for `POST /convert`. Mirrors backend
+ * `ConvertRequest`; omitted fields fall back to the server-side defaults
+ * shown in the comments.
+ */
+export interface RvcConvertParams {
+  /** Pitch shift in semitones, -24..24 (default 0). */
+  f0_up_key?: number;
+  /** Pitch estimator (default 'rmvpe'). */
+  f0_method?: RvcF0Method;
+  /** Feature-index blend, 0..1 (default 0.75). */
+  index_rate?: number;
+  /** Envelope mix, 0..1 (default 0.25). */
+  rms_mix_rate?: number;
+  /** Consonant/breath protection, 0..1 (default 0.33). */
+  protect?: number;
+}
+
+/**
+ * Response for `POST /convert`. `task_id` is a generation id: progress is
+ * polled through the existing `GET /generate/{id}/status` stream and the
+ * result WAV is served by `GET /audio/{id}`, exactly like a TTS generation.
+ */
+export interface ConvertResponse {
+  task_id: string;
+  profile_id: string;
+  status: string;
+  created_at: string;
 }

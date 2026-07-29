@@ -13,5 +13,12 @@ export default defineConfig({
   },
   build: {
     outDir: 'dist',
+    // Keep the realtime RVC AudioWorklet modules as physical hashed assets
+    // instead of inlined base64 `data:` URIs (see app/vite.config.ts for the
+    // full rationale). The web build shares app/src via the `@` alias, so the
+    // same override is required here. `undefined` for other assets keeps the
+    // default inline behavior byte-for-byte.
+    assetsInlineLimit: (filePath: string) =>
+      /[\\/]worklets[\\/]/.test(filePath) ? false : undefined,
   },
 });
