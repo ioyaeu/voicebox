@@ -33,11 +33,19 @@ class VoiceProfile(Base):
     effects_chain = Column(Text, nullable=True)
 
     # Voice type system — added v0.3.x
-    voice_type = Column(String, default="cloned")  # "cloned" | "preset" | "designed"
+    voice_type = Column(String, default="cloned")  # "cloned" | "preset" | "designed" | "rvc"
     preset_engine = Column(String, nullable=True)   # e.g. "kokoro" — only for preset
     preset_voice_id = Column(String, nullable=True)  # e.g. "am_adam" — only for preset
     design_prompt = Column(Text, nullable=True)      # text description — only for designed
     default_engine = Column(String, nullable=True)   # auto-selected engine, locked for preset
+
+    # RVC Model configuration — added v0.4.x
+    rvc_model_path = Column(String, nullable=True)   # path to the .pth weights file
+    rvc_index_path = Column(String, nullable=True)   # path to the optional .index retrieval index
+    # TTS->RVC chain (Phase C) — added v0.5.x
+    rvc_base_voice = Column(String, nullable=True)   # "{engine}:{voice_id}" base TTS voice
+    rvc_params = Column(Text, nullable=True)          # JSON conversion params (f0/index/rms/protect)
+
     # Free-form character prompt used by the compose button and the
     # personality-rewrite path on /generate. Describes *what* this voice
     # says and how, orthogonal to how it sounds (handled by the preset /

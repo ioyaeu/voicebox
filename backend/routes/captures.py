@@ -5,6 +5,7 @@ import logging
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
+from starlette.requests import ClientDisconnect
 
 from .. import config, models
 from ..backends import get_llm_model_configs, get_stt_model_configs
@@ -21,6 +22,10 @@ router = APIRouter()
 UPLOAD_CHUNK_SIZE = 1024 * 1024  # 1 MB
 
 
+def _is_realtime_conflict(exc: RuntimeError) -> bool:
+    return "real-time streaming is active" in str(exc)
+
+
 @router.post("/captures", response_model=models.CaptureCreateResponse)
 async def create_capture_endpoint(
     file: UploadFile = File(...),
@@ -30,9 +35,14 @@ async def create_capture_endpoint(
     db: Session = Depends(get_db),
 ):
     """Upload audio, run STT, persist the capture."""
-    chunks = []
-    while chunk := await file.read(UPLOAD_CHUNK_SIZE):
-        chunks.append(chunk)
+    try:
+        chunks = []
+        while chunk := await file.read(UPLOAD_CHUNK_SIZE):
+            chunks.append(chunk)
+    except (ClientDisconnect, BrokenPipeError, ConnectionResetError):
+        logger.debug("Client disconnected during capture upload")
+        raise HTTPException(status_code=499, detail="Client disconnected during upload")
+
     audio_bytes = b"".join(chunks)
 
     if not audio_bytes:
@@ -56,6 +66,11 @@ async def create_capture_endpoint(
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+    except RuntimeError as e:
+        if _is_realtime_conflict(e):
+            raise HTTPException(status_code=409, detail=str(e))
+        logger.exception("Failed to create capture")
+        raise HTTPException(status_code=500, detail=str(e))
     except Exception as e:
         logger.exception("Failed to create capture")
         raise HTTPException(status_code=500, detail=str(e))
@@ -222,6 +237,11 @@ async def retranscribe_capture_endpoint(
         )
     except FileNotFoundError as e:
         raise HTTPException(status_code=410, detail=str(e))
+    except RuntimeError as e:
+        if _is_realtime_conflict(e):
+            raise HTTPException(status_code=409, detail=str(e))
+        logger.exception("Retranscribe failed for capture %s", capture_id)
+        raise HTTPException(status_code=500, detail=str(e))
     except Exception as e:
         logger.exception("Retranscribe failed for capture %s", capture_id)
         raise HTTPException(status_code=500, detail=str(e))

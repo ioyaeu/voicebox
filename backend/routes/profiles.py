@@ -104,6 +104,21 @@ async def list_preset_voices(engine: str):
                 for speaker_id, display_name, gender, lang, _desc in QWEN_CUSTOM_VOICES
             ],
         }
+    if engine == "voxtral":
+        from ..backends.voxtral_backend import VOXTRAL_VOICES
+
+        return {
+            "engine": engine,
+            "voices": [
+                {
+                    "voice_id": vid,
+                    "name": name,
+                    "gender": gender,
+                    "language": lang,
+                }
+                for vid, name, gender, lang in VOXTRAL_VOICES
+            ],
+        }
     return {"engine": engine, "voices": []}
 
 @router.get("/profiles/{profile_id}", response_model=models.VoiceProfileResponse)
@@ -139,7 +154,25 @@ async def delete_profile(
     profile_id: str,
     db: Session = Depends(get_db),
 ):
-    """Delete a voice profile."""
+    """Delete a voice profile.
+
+    Blocks (409) when the profile is the base voice of one or more RVC profiles:
+    silently deleting it would strand those chains at generation time, exactly the
+    "why did my voice change" bug class the base-voice validation prevents. The
+    409 body names the dependents so the client can reassign or delete them first.
+    """
+    dependents = profiles.find_rvc_base_dependents(profile_id, db)
+    if dependents:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "message": (
+                    f"This profile is the base voice for {len(dependents)} RVC "
+                    "profile(s). Reassign or delete them before deleting it."
+                ),
+                "dependents": dependents,
+            },
+        )
     success = await profiles.delete_profile(profile_id, db)
     if not success:
         raise HTTPException(status_code=404, detail="Profile not found")
@@ -276,6 +309,86 @@ async def delete_profile_avatar(
     if not success:
         raise HTTPException(status_code=404, detail="Profile not found or no avatar to delete")
     return {"message": "Avatar deleted successfully"}
+
+
+RVC_UPLOAD_CHUNK_SIZE = 1024 * 1024  # 1 MB
+
+
+async def _stream_upload_to_temp(
+    file: UploadFile, dest_dir: Path, suffix: str, max_bytes: int
+) -> str:
+    """Stream an upload to a temp file inside ``dest_dir``, capped at ``max_bytes``.
+
+    The temp lives on the same filesystem as its final destination so the
+    service layer can commit it with an atomic ``os.replace``. The whole body is
+    never held in memory; the cap is enforced chunk-by-chunk and the partial
+    file is removed before raising if it is exceeded.
+    """
+    with tempfile.NamedTemporaryFile(dir=dest_dir, suffix=suffix, delete=False) as tmp:
+        total = 0
+        while chunk := await file.read(RVC_UPLOAD_CHUNK_SIZE):
+            total += len(chunk)
+            if total > max_bytes:
+                Path(tmp.name).unlink(missing_ok=True)
+                raise HTTPException(
+                    status_code=413,
+                    detail=f"File too large (max {max_bytes // (1024 * 1024)} MB)",
+                )
+            tmp.write(chunk)
+        return tmp.name
+
+
+@router.post("/profiles/{profile_id}/rvc-model", response_model=models.VoiceProfileResponse)
+async def upload_rvc_model(
+    profile_id: str,
+    model: UploadFile = File(...),
+    index: UploadFile | None = File(None),
+    db: Session = Depends(get_db),
+):
+    """Upload (and validate) the RVC checkpoint and optional retrieval index."""
+    from ..backends.rvc.checkpoint import MAX_CHECKPOINT_BYTES, MAX_INDEX_BYTES
+
+    profile = db.query(DBVoiceProfile).filter_by(id=profile_id).first()
+    if not profile:
+        raise HTTPException(status_code=404, detail="Profile not found")
+    if (getattr(profile, "voice_type", None) or "cloned") != "rvc":
+        raise HTTPException(
+            status_code=400, detail="RVC model upload is only supported for RVC voice profiles"
+        )
+
+    profile_dir = config.get_profiles_dir() / profile_id
+    profile_dir.mkdir(parents=True, exist_ok=True)
+
+    model_tmp = None
+    index_tmp = None
+    try:
+        model_tmp = await _stream_upload_to_temp(
+            model, profile_dir, ".pth", MAX_CHECKPOINT_BYTES
+        )
+        if index is not None:
+            index_tmp = await _stream_upload_to_temp(
+                index, profile_dir, ".index", MAX_INDEX_BYTES
+            )
+        return await profiles.upload_rvc_model(profile_id, model_tmp, index_tmp, db)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    finally:
+        if model_tmp is not None:
+            Path(model_tmp).unlink(missing_ok=True)
+        if index_tmp is not None:
+            Path(index_tmp).unlink(missing_ok=True)
+
+
+@router.delete("/profiles/{profile_id}/rvc-model", response_model=models.VoiceProfileResponse)
+async def delete_rvc_model(
+    profile_id: str,
+    db: Session = Depends(get_db),
+):
+    """Delete the RVC checkpoint, index and metadata for a profile."""
+    profile = await profiles.delete_rvc_model(profile_id, db)
+    if profile is None:
+        raise HTTPException(status_code=404, detail="Profile not found")
+    return profile
 
 
 @router.get("/profiles/{profile_id}/export")

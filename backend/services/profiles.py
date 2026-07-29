@@ -15,6 +15,7 @@ from ..database import Generation as DBGeneration, ProfileSample as DBProfileSam
 from ..models import (
     EffectConfig,
     ProfileSampleResponse,
+    RVCParams,
     VoiceProfileCreate,
     VoiceProfileResponse,
 )
@@ -25,6 +26,78 @@ from ..utils.images import process_avatar, validate_image
 logger = logging.getLogger(__name__)
 
 CLONING_ENGINES = {"qwen", "luxtts", "chatterbox", "chatterbox_turbo", "tada"}
+
+RVC_MODEL_FILENAME = "model.pth"
+RVC_INDEX_FILENAME = "model.index"
+RVC_METADATA_FILENAME = "rvc_model.json"
+
+# Default base TTS voice for the TTS->RVC chain: a cheap, CPU-friendly,
+# cloning-free Kokoro preset (verified present in KOKORO_VOICES). Stored as
+# "{engine}:{voice_id}" — see ``parse_rvc_base_voice``.
+DEFAULT_RVC_BASE_VOICE = "kokoro:af_heart"
+
+# Default conversion params, identical to step 03's ConvertRequest defaults.
+DEFAULT_RVC_PARAMS: dict = {
+    "f0_up_key": 0,
+    "f0_method": "rmvpe",
+    "index_rate": 0.75,
+    "rms_mix_rate": 0.25,
+    "protect": 0.33,
+}
+
+
+def parse_rvc_base_voice(raw: str | None) -> tuple[str, str]:
+    """Split a stored ``"{engine}:{voice_id}"`` base-voice string.
+
+    Falls back to :data:`DEFAULT_RVC_BASE_VOICE` when the value is missing or
+    malformed (no colon, or an empty half), so a bad/absent setting can never
+    crash the chain — it just uses the default preset voice.
+    """
+    if raw and ":" in raw:
+        engine, voice_id = raw.split(":", 1)
+        engine, voice_id = engine.strip(), voice_id.strip()
+        if engine and voice_id:
+            return engine, voice_id
+    engine, voice_id = DEFAULT_RVC_BASE_VOICE.split(":", 1)
+    return engine, voice_id
+
+
+def load_rvc_params(raw: str | None) -> dict:
+    """Deserialize the profile's ``rvc_params`` JSON, merged over the defaults.
+
+    Returns a dict with all five keys always present. Unknown/invalid stored
+    JSON degrades to the defaults (logged) rather than raising.
+    """
+    params = dict(DEFAULT_RVC_PARAMS)
+    if not raw:
+        return params
+    try:
+        stored = _json.loads(raw)
+    except (ValueError, TypeError) as e:
+        logger.warning("Invalid rvc_params JSON, using defaults: %s", e)
+        return params
+    if isinstance(stored, dict):
+        for key in DEFAULT_RVC_PARAMS:
+            if key in stored and stored[key] is not None:
+                params[key] = stored[key]
+    return params
+
+
+def _rvc_metadata_path(profile_id: str) -> Path:
+    return config.get_profiles_dir() / profile_id / RVC_METADATA_FILENAME
+
+
+def _read_rvc_metadata(profile_id: str) -> dict:
+    """Read the RVC checkpoint metadata sidecar; empty dict if absent/unreadable."""
+    path = _rvc_metadata_path(profile_id)
+    if not path.is_file():
+        return {}
+    try:
+        data = _json.loads(path.read_text())
+        return data if isinstance(data, dict) else {}
+    except (OSError, ValueError) as e:
+        logger.warning("Failed to read RVC metadata for profile %s: %s", profile_id, e)
+        return {}
 
 
 def _profile_to_response(
@@ -42,6 +115,26 @@ def _profile_to_response(
             import logging
 
             logging.warning(f"Failed to parse effects_chain for profile {profile.id}: {e}")
+
+    rvc_model_stored = getattr(profile, "rvc_model_path", None)
+    # rvc_has_model reflects an actually-present validated checkpoint on disk, not
+    # merely a non-null column: a moved/pruned data dir can strand the column.
+    rvc_has_model = False
+    if rvc_model_stored:
+        resolved_model = config.resolve_storage_path(rvc_model_stored)
+        rvc_has_model = resolved_model is not None and resolved_model.exists()
+    rvc_meta = _read_rvc_metadata(profile.id) if rvc_model_stored else {}
+
+    voice_type = getattr(profile, "voice_type", None) or "cloned"
+    rvc_base_voice = getattr(profile, "rvc_base_voice", None)
+    rvc_params = None
+    if voice_type == "rvc":
+        # Surface sensible defaults for rvc profiles even when the columns are
+        # NULL (profiles created before the chain, or via the create endpoint
+        # without these fields) so the editor always renders real values.
+        rvc_base_voice = rvc_base_voice or DEFAULT_RVC_BASE_VOICE
+        rvc_params = RVCParams(**load_rvc_params(getattr(profile, "rvc_params", None)))
+
     return VoiceProfileResponse(
         id=profile.id,
         name=profile.name,
@@ -49,17 +142,197 @@ def _profile_to_response(
         language=profile.language,
         avatar_path=profile.avatar_path,
         effects_chain=effects_chain,
-        voice_type=getattr(profile, "voice_type", None) or "cloned",
+        voice_type=voice_type,
         preset_engine=getattr(profile, "preset_engine", None),
         preset_voice_id=getattr(profile, "preset_voice_id", None),
         design_prompt=getattr(profile, "design_prompt", None),
         default_engine=getattr(profile, "default_engine", None),
+        rvc_has_model=rvc_has_model,
+        rvc_base_voice=rvc_base_voice,
+        rvc_params=rvc_params,
+        rvc_version=rvc_meta.get("version"),
+        rvc_sample_rate=rvc_meta.get("sample_rate"),
+        rvc_f0=rvc_meta.get("if_f0"),
         personality=getattr(profile, "personality", None),
         generation_count=generation_count,
         sample_count=sample_count,
         created_at=profile.created_at,
         updated_at=profile.updated_at,
     )
+
+
+# Engines whose preset voices are cloning-free and thus valid base voices for
+# the TTS->RVC chain (mirrors ``parse_rvc_base_voice`` / DEFAULT_RVC_BASE_VOICE).
+RVC_BASE_VOICE_ENGINES = {"kokoro", "qwen_custom_voice", "voxtral"}
+
+# Sentinel prefix distinguishing a profile-base (``"profile:{profile_id}"``) from
+# a preset engine base (``"{engine}:{voice_id}"``). No preset engine is named
+# "profile", so ``startswith`` disambiguates the two grammars unambiguously.
+RVC_PROFILE_BASE_PREFIX = "profile:"
+
+
+def rvc_base_is_profile_ref(rvc_base_voice: str | None) -> bool:
+    """True when a stored base voice names a Voicebox profile, not a preset."""
+    return bool(rvc_base_voice) and rvc_base_voice.startswith(RVC_PROFILE_BASE_PREFIX)
+
+
+def _preset_voice_language(engine: str, voice_id: str) -> str | None:
+    """Language code a preset ``engine:voice_id`` base voice speaks, or None.
+
+    Reads the same per-voice tables ``routes/profiles.list_preset_voices`` serves,
+    so the language shown in the picker and the language defaulted onto an rvc
+    profile come from one source of truth.
+    """
+    if engine == "kokoro":
+        from ..backends.kokoro_backend import KOKORO_VOICES
+
+        for vid, _name, _gender, lang in KOKORO_VOICES:
+            if vid == voice_id:
+                return lang
+    elif engine == "qwen_custom_voice":
+        from ..backends.qwen_custom_voice_backend import QWEN_CUSTOM_VOICES
+
+        for vid, _name, _gender, lang, _desc in QWEN_CUSTOM_VOICES:
+            if vid == voice_id:
+                return lang
+    elif engine == "voxtral":
+        from ..backends.voxtral_backend import VOXTRAL_VOICES
+
+        for vid, _name, _gender, lang in VOXTRAL_VOICES:
+            if vid == voice_id:
+                return lang
+    return None
+
+
+def _validate_rvc_base_voice(
+    rvc_base_voice: str, db: Session | None = None
+) -> tuple[str | None, str, str | None]:
+    """Validate and normalize an rvc base-voice string.
+
+    Two grammars are accepted:
+
+    * ``"{engine}:{voice_id}"`` — a cloning-free preset voice
+      (``kokoro``/``qwen_custom_voice``/``voxtral``) plus a voice id that
+      engine offers.
+    * ``"profile:{profile_id}"`` — an existing non-rvc Voicebox profile used as
+      the base. The profile must exist, must **not** itself be an rvc profile
+      (one-level recursion guard, no chain-of-chains), and must be
+      generation-capable for its type (cloned → at least one sample; designed →
+      a design prompt). A **preset** profile is legal and is normalized to its
+      ``"{engine}:{voice_id}"`` form so the chain has a single resolution path.
+
+    Returns ``(error, normalized_value, base_language)``. ``error`` is a
+    user-facing message (turns a garbage value into a clear 400 rather than a
+    silent bad setting that only fails at generation) or None when valid.
+    ``normalized_value`` is what should be persisted — identical to the input for
+    every case except a preset-profile base, which collapses to its engine voice.
+    ``base_language`` is the language code the base voice speaks (used to default
+    the rvc profile's ``language`` column) or None when undeterminable.
+    """
+    # ── profile:{id} grammar ──────────────────────────────────────────────
+    if rvc_base_is_profile_ref(rvc_base_voice):
+        base_id = rvc_base_voice[len(RVC_PROFILE_BASE_PREFIX):].strip()
+        if not base_id:
+            return (
+                f"Invalid rvc_base_voice '{rvc_base_voice}': missing profile id.",
+                rvc_base_voice,
+                None,
+            )
+        if db is None:
+            return (
+                "Validating a profile base voice requires a database session.",
+                rvc_base_voice,
+                None,
+            )
+        base = db.query(DBVoiceProfile).filter_by(id=base_id).first()
+        if base is None:
+            return (f"Base profile '{base_id}' does not exist.", rvc_base_voice, None)
+        base_type = getattr(base, "voice_type", None) or "cloned"
+        # Recursion guard — one level only.
+        if base_type == "rvc":
+            return (
+                "An RVC profile cannot be used as the base voice for another RVC "
+                "profile (no chain-of-chains).",
+                rvc_base_voice,
+                None,
+            )
+        # Preset profiles collapse to the engine:voice_id path.
+        if base_type == "preset":
+            if not base.preset_engine or not base.preset_voice_id:
+                return (
+                    f"Base profile '{base.name}' is a preset profile missing its "
+                    "engine metadata.",
+                    rvc_base_voice,
+                    None,
+                )
+            return None, f"{base.preset_engine}:{base.preset_voice_id}", base.language
+        # Designed profiles need a design prompt to be generation-capable.
+        if base_type == "designed":
+            if not (getattr(base, "design_prompt", None) or "").strip():
+                return (
+                    f"Base profile '{base.name}' is a designed profile without a "
+                    "design prompt, so it cannot generate audio.",
+                    rvc_base_voice,
+                    None,
+                )
+            return None, rvc_base_voice, base.language
+        # Cloned (default): needs at least one reference sample.
+        sample_count = db.query(DBProfileSample).filter_by(profile_id=base_id).count()
+        if sample_count == 0:
+            return (
+                f"Base profile '{base.name}' has no voice samples, so it cannot "
+                "generate audio.",
+                rvc_base_voice,
+                None,
+            )
+        return None, rvc_base_voice, base.language
+
+    # ── engine:voice_id grammar ───────────────────────────────────────────
+    if ":" not in rvc_base_voice:
+        return (
+            f"Invalid rvc_base_voice '{rvc_base_voice}': expected "
+            "'engine:voice_id' (e.g. 'kokoro:af_heart') or 'profile:{id}'.",
+            rvc_base_voice,
+            None,
+        )
+    engine, voice_id = rvc_base_voice.split(":", 1)
+    engine, voice_id = engine.strip(), voice_id.strip()
+    if engine not in RVC_BASE_VOICE_ENGINES:
+        return (
+            f"Invalid rvc_base_voice engine '{engine}': must be one of "
+            f"{sorted(RVC_BASE_VOICE_ENGINES)}.",
+            rvc_base_voice,
+            None,
+        )
+    if not voice_id:
+        return (
+            f"Invalid rvc_base_voice '{rvc_base_voice}': missing voice id.",
+            rvc_base_voice,
+            None,
+        )
+    available_voice_ids = _get_preset_voice_ids(engine)
+    if available_voice_ids and voice_id not in available_voice_ids:
+        return (f"Voice '{voice_id}' is not a valid {engine} voice.", rvc_base_voice, None)
+    return None, rvc_base_voice, _preset_voice_language(engine, voice_id)
+
+
+def find_rvc_base_dependents(profile_id: str, db: Session) -> list[dict]:
+    """RVC profiles that reference *profile_id* as their base voice.
+
+    A profile base is stored as ``"profile:{id}"`` (preset bases are normalized to
+    ``engine:voice_id`` at write time and never point at a profile), so an exact
+    match on that string finds every dependent. Returned as ``{"id", "name"}``
+    dicts, ordered by name, for the delete-block 409 payload.
+    """
+    ref = f"{RVC_PROFILE_BASE_PREFIX}{profile_id}"
+    rows = (
+        db.query(DBVoiceProfile.id, DBVoiceProfile.name)
+        .filter(DBVoiceProfile.voice_type == "rvc")
+        .filter(DBVoiceProfile.rvc_base_voice == ref)
+        .order_by(DBVoiceProfile.name)
+        .all()
+    )
+    return [{"id": rid, "name": rname} for rid, rname in rows]
 
 
 def _get_preset_voice_ids(engine: str) -> set[str]:
@@ -72,6 +345,11 @@ def _get_preset_voice_ids(engine: str) -> set[str]:
         from ..backends.qwen_custom_voice_backend import QWEN_CUSTOM_VOICES
 
         return {voice_id for voice_id, _name, _gender, _lang, _desc in QWEN_CUSTOM_VOICES}
+
+    if engine == "voxtral":
+        from ..backends.voxtral_backend import VOXTRAL_VOICES
+
+        return {voice_id for voice_id, _name, _gender, _lang in VOXTRAL_VOICES}
 
     return set()
 
@@ -102,6 +380,19 @@ def _validate_profile_fields(
             return "Designed profiles cannot set preset_engine or preset_voice_id"
         return None
 
+    if voice_type == "rvc":
+        if preset_engine or preset_voice_id:
+            return "RVC profiles cannot set preset_engine or preset_voice_id"
+        if design_prompt:
+            return "RVC profiles cannot set design_prompt"
+        if default_engine and default_engine != "rvc":
+            return f"RVC profiles cannot use default engine '{default_engine}'"
+        # The base voice (``rvc_base_voice``) is validated + normalized separately
+        # in create_profile/update_profile, where a DB session is available to
+        # resolve a ``profile:{id}`` base. (rvc_params bounds — f0_up_key, rates,
+        # f0_method — are already enforced by the RVCParams pydantic model.)
+        return None
+
     if preset_engine or preset_voice_id:
         return "Cloned profiles cannot set preset_engine or preset_voice_id"
     if design_prompt:
@@ -129,6 +420,11 @@ def validate_profile_engine(profile, engine: str) -> None:
         design_prompt = getattr(profile, "design_prompt", None)
         if not design_prompt or not design_prompt.strip():
             raise ValueError(f"Designed profile {profile.id} is missing design_prompt")
+        return
+
+    if voice_type == "rvc":
+        if engine != "rvc":
+            raise ValueError(f"Engine '{engine}' is not supported by RVC profiles")
         return
 
     if engine not in CLONING_ENGINES:
@@ -161,6 +457,24 @@ async def create_profile(
     voice_type = data.voice_type or "cloned"
     if voice_type == "preset" and data.preset_engine and not default_engine:
         default_engine = data.preset_engine
+    # RVC profiles resolve their base engine internally; the external contract
+    # still requires engine == "rvc", reached through default_engine.
+    if voice_type == "rvc" and not default_engine:
+        default_engine = "rvc"
+
+    # Persist chain settings for rvc profiles (with defaults); leave NULL otherwise.
+    rvc_base_voice = None
+    rvc_params_json = None
+    rvc_base_language = None
+    if voice_type == "rvc":
+        raw_base_voice = data.rvc_base_voice or DEFAULT_RVC_BASE_VOICE
+        base_error, rvc_base_voice, rvc_base_language = _validate_rvc_base_voice(
+            raw_base_voice, db
+        )
+        if base_error:
+            raise ValueError(base_error)
+        params = data.rvc_params.model_dump() if data.rvc_params is not None else DEFAULT_RVC_PARAMS
+        rvc_params_json = _json.dumps(params)
 
     validation_error = _validate_profile_fields(
         voice_type=voice_type,
@@ -172,16 +486,25 @@ async def create_profile(
     if validation_error:
         raise ValueError(validation_error)
 
+    # Effective language: an rvc profile's spoken language is its base voice's.
+    # Default from the base when the caller left the language at the schema
+    # default ("en"); an explicit non-default language is always honored.
+    language = data.language
+    if voice_type == "rvc" and rvc_base_language and language == "en":
+        language = rvc_base_language
+
     db_profile = DBVoiceProfile(
         id=str(uuid.uuid4()),
         name=data.name,
         description=data.description,
-        language=data.language,
+        language=language,
         voice_type=voice_type,
         preset_engine=data.preset_engine,
         preset_voice_id=data.preset_voice_id,
         design_prompt=data.design_prompt,
         default_engine=default_engine,
+        rvc_base_voice=rvc_base_voice,
+        rvc_params=rvc_params_json,
         personality=data.personality,
         created_at=datetime.utcnow(),
         updated_at=datetime.utcnow(),
@@ -397,12 +720,36 @@ async def update_profile(
     if validation_error:
         raise ValueError(validation_error)
 
+    # Validate + normalize the base voice up front (a ``profile:{id}`` base needs
+    # the DB session) so we can also derive the effective language before writing.
+    normalized_base_voice = None
+    rvc_base_language = None
+    if voice_type == "rvc" and data.rvc_base_voice is not None:
+        raw_base_voice = data.rvc_base_voice or DEFAULT_RVC_BASE_VOICE
+        base_error, normalized_base_voice, rvc_base_language = _validate_rvc_base_voice(
+            raw_base_voice, db
+        )
+        if base_error:
+            raise ValueError(base_error)
+
     profile.name = data.name
     profile.description = data.description
-    profile.language = data.language
+    # Default the language from the base voice when the caller left it at the
+    # schema default ("en"); an explicit non-default language is honored.
+    language = data.language
+    if voice_type == "rvc" and rvc_base_language and language == "en":
+        language = rvc_base_language
+    profile.language = language
     profile.personality = data.personality
     if data.default_engine is not None:
         profile.default_engine = data.default_engine or None  # empty string → NULL
+    # Chain settings are editable only on rvc profiles; empty base voice resets
+    # to the default preset (normalized above).
+    if voice_type == "rvc":
+        if normalized_base_voice is not None:
+            profile.rvc_base_voice = normalized_base_voice
+        if data.rvc_params is not None:
+            profile.rvc_params = _json.dumps(data.rvc_params.model_dump())
     profile.updated_at = datetime.utcnow()
 
     db.commit()
@@ -708,3 +1055,155 @@ async def delete_avatar(
     db.commit()
 
     return True
+
+
+def _validate_and_store_rvc_files(
+    profile_id: str,
+    model_tmp_path: str,
+    index_tmp_path: str | None,
+) -> tuple[str, str | None]:
+    """Validate the streamed RVC artifacts, then atomically move them into place.
+
+    Runs off the event loop (``torch.load`` on a large checkpoint blocks).
+    Validation happens *before* any file is moved, so a failure raises
+    ``ValueError`` without touching a previously stored model. Returns the
+    storage paths to persist on the profile.
+    """
+    import os
+
+    from ..backends.rvc.checkpoint import (
+        load_rvc_checkpoint,
+        validate_faiss_index,
+        validate_rvc_checkpoint,
+    )
+
+    try:
+        ckpt = load_rvc_checkpoint(model_tmp_path)
+    except ValueError:
+        # Size / not-a-dict rejections already carry a user-facing message.
+        raise
+    except Exception as e:
+        # torch.load(weights_only=True) blocks malicious pickles by raising
+        # UnpicklingError (and corrupt archives raise other library errors);
+        # translate any such untrusted-load failure into a 400-mapped ValueError.
+        logger.warning("Rejected RVC checkpoint upload for profile %s: %s", profile_id, e)
+        raise ValueError(
+            "The uploaded file is not a valid RVC checkpoint (it could not be safely deserialized)."
+        ) from e
+
+    info = validate_rvc_checkpoint(ckpt)
+    if index_tmp_path is not None:
+        try:
+            validate_faiss_index(index_tmp_path, info.embedder_dim)
+        except ValueError:
+            raise
+        except Exception as e:
+            logger.warning("Rejected RVC index upload for profile %s: %s", profile_id, e)
+            raise ValueError("The uploaded file is not a valid FAISS index.") from e
+
+    profile_dir = config.get_profiles_dir() / profile_id
+    profile_dir.mkdir(parents=True, exist_ok=True)
+
+    model_dest = profile_dir / RVC_MODEL_FILENAME
+    os.replace(model_tmp_path, model_dest)
+
+    index_dest = profile_dir / RVC_INDEX_FILENAME
+    if index_tmp_path is not None:
+        os.replace(index_tmp_path, index_dest)
+        index_stored = config.to_storage_path(index_dest)
+    else:
+        # A previously uploaded index is derived from a specific model; a fresh
+        # model without an index makes the old one a stale, mismatched pair.
+        index_dest.unlink(missing_ok=True)
+        index_stored = None
+
+    _rvc_metadata_path(profile_id).write_text(
+        _json.dumps(
+            {
+                "version": info.version,
+                "sample_rate": info.sample_rate,
+                "if_f0": info.if_f0,
+            }
+        )
+    )
+
+    return config.to_storage_path(model_dest), index_stored
+
+
+async def upload_rvc_model(
+    profile_id: str,
+    model_tmp_path: str,
+    index_tmp_path: str | None,
+    db: Session,
+) -> VoiceProfileResponse:
+    """Validate and store an uploaded RVC checkpoint (and optional index).
+
+    Args:
+        profile_id: Profile ID
+        model_tmp_path: Temp path of the streamed ``.pth`` checkpoint
+        index_tmp_path: Temp path of the streamed ``.index`` file, or None
+        db: Database session
+
+    Returns:
+        Updated profile
+
+    Raises:
+        ValueError: If the profile is missing, is not an RVC profile, or the
+            uploaded artifacts fail checkpoint/index validation.
+    """
+    import asyncio
+
+    profile = db.query(DBVoiceProfile).filter_by(id=profile_id).first()
+    if not profile:
+        raise ValueError(f"Profile {profile_id} not found")
+
+    voice_type = getattr(profile, "voice_type", None) or "cloned"
+    if voice_type != "rvc":
+        raise ValueError("RVC model upload is only supported for RVC voice profiles")
+
+    model_stored, index_stored = await asyncio.to_thread(
+        _validate_and_store_rvc_files, profile_id, model_tmp_path, index_tmp_path
+    )
+
+    profile.rvc_model_path = model_stored
+    profile.rvc_index_path = index_stored
+    profile.updated_at = datetime.utcnow()
+
+    db.commit()
+    db.refresh(profile)
+
+    return _profile_to_response(profile)
+
+
+async def delete_rvc_model(
+    profile_id: str,
+    db: Session,
+) -> VoiceProfileResponse | None:
+    """Remove a profile's RVC model, index and metadata sidecar.
+
+    Args:
+        profile_id: Profile ID
+        db: Database session
+
+    Returns:
+        Updated profile, or None if the profile does not exist.
+    """
+    profile = db.query(DBVoiceProfile).filter_by(id=profile_id).first()
+    if not profile:
+        return None
+
+    for stored in (profile.rvc_model_path, profile.rvc_index_path):
+        resolved = config.resolve_storage_path(stored)
+        if resolved is not None and resolved.exists():
+            resolved.unlink()
+
+    _rvc_metadata_path(profile_id).unlink(missing_ok=True)
+
+    profile.rvc_model_path = None
+    profile.rvc_index_path = None
+    profile.updated_at = datetime.utcnow()
+
+    db.commit()
+    db.refresh(profile)
+
+    return _profile_to_response(profile)

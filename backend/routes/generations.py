@@ -26,6 +26,24 @@ IMPORT_AUDIO_EXTENSIONS = {".wav", ".mp3", ".flac", ".ogg", ".m4a", ".aac", ".we
 IMPORT_AUDIO_MAX_BYTES = 200 * 1024 * 1024  # 200 MB
 
 
+def _raise_if_realtime_stream_active() -> None:
+    """Reject new TTS work while the realtime RVC stream owns the audio path."""
+    try:
+        from ..backends.rvc import realtime_stream_active
+
+        active = realtime_stream_active()
+    except Exception:
+        active = False
+    if active:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Voice Changer real-time streaming is active. Stop the live "
+                "stream before starting a TTS generation."
+            ),
+        )
+
+
 def _get_or_create_import_profile(db: Session) -> DBVoiceProfile:
     """Singleton profile every imported audio clip points at — keeps the
     Generation FK happy without making profile_id nullable across the schema."""
@@ -50,6 +68,20 @@ def _get_or_create_import_profile(db: Session) -> DBVoiceProfile:
 
 
 def _resolve_generation_engine(data: models.GenerationRequest, profile) -> str:
+    # RVC profiles own their base engine — the chain resolves the base TTS voice
+    # internally — so an omitted/null engine resolves to the chain ("rvc").
+    if getattr(profile, "voice_type", None) == "rvc" or getattr(profile, "default_engine", None) == "rvc":
+        # An explicit, non-"rvc" engine is a genuine conflict, not something to
+        # silently override: reject it so the caller learns the profile can only
+        # run its chain (raised as ValueError → 400 at the call sites).
+        if data.engine and data.engine != "rvc":
+            raise ValueError(
+                f"This is an RVC voice profile and only supports engine 'rvc', not "
+                f"'{data.engine}'. Omit engine to use the profile's TTS->RVC chain."
+            )
+        return "rvc"
+    # Non-rvc resolution is unchanged: request engine, then the profile's
+    # default/preset engine, then the qwen fallback.
     return data.engine or getattr(profile, "default_engine", None) or getattr(profile, "preset_engine", None) or "qwen"
 
 
@@ -68,11 +100,12 @@ async def generate_speech(
 
     from ..backends import engine_has_model_sizes
 
-    engine = _resolve_generation_engine(data, profile)
     try:
+        engine = _resolve_generation_engine(data, profile)
         profiles.validate_profile_engine(profile, engine)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+    _raise_if_realtime_stream_active()
 
     model_size = (data.model_size or "1.7B") if engine_has_model_sizes(engine) else None
 
@@ -155,6 +188,8 @@ async def retry_generation(generation_id: str, db: Session = Depends(get_db)):
     if (gen.status or "completed") != "failed":
         raise HTTPException(status_code=400, detail="Only failed generations can be retried")
 
+    _raise_if_realtime_stream_active()
+
     gen.status = "generating"
     gen.error = None
     gen.audio_path = ""
@@ -199,6 +234,8 @@ async def regenerate_generation(generation_id: str, db: Session = Depends(get_db
     if (gen.status or "completed") != "completed":
         raise HTTPException(status_code=400, detail="Generation must be completed to regenerate")
 
+    _raise_if_realtime_stream_active()
+
     gen.status = "generating"
     gen.error = None
     db.commit()
@@ -239,7 +276,7 @@ async def cancel_generation(generation_id: str, db: Session = Depends(get_db)):
     if not gen:
         raise HTTPException(status_code=404, detail="Generation not found")
 
-    if (gen.status or "completed") not in ("loading_model", "generating"):
+    if (gen.status or "completed") not in ("loading_model", "generating", "converting"):
         raise HTTPException(status_code=400, detail="Only active generations can be cancelled")
 
     cancellation_state = cancel_generation_job(generation_id)
@@ -333,11 +370,13 @@ async def stream_speech(
     if not profile:
         raise HTTPException(status_code=404, detail="Profile not found")
 
-    engine = _resolve_generation_engine(data, profile)
     try:
+        engine = _resolve_generation_engine(data, profile)
         profiles.validate_profile_engine(profile, engine)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+    _raise_if_realtime_stream_active()
+
     tts_model = get_tts_backend_for_engine(engine)
     model_size = data.model_size or "1.7B"
 

@@ -329,10 +329,12 @@ async def generate_chunked(
             len(chunks),
             len(chunk_text),
         )
-        # Vary the seed per chunk to avoid correlated RNG artefacts,
-        # but keep it deterministic so the same (text, seed) pair
-        # always produces the same output.
-        chunk_seed = (seed + i) if seed is not None else None
+        # Most engines benefit from a deterministic per-chunk seed offset,
+        # which avoids correlated RNG artefacts. Some engines, notably Voxtral,
+        # treat each chunk like a fresh take; preserving the seed helps keep
+        # voice identity, pacing, and energy consistent across chunk boundaries.
+        preserve_seed = bool(getattr(backend, "preserve_seed_across_chunks", False))
+        chunk_seed = seed if preserve_seed else (seed + i if seed is not None else None)
 
         chunk_audio, chunk_sr = await generate_one(
             chunk_text,

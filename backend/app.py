@@ -234,6 +234,39 @@ def _mount_frontend(application: FastAPI) -> None:
     logger.info("Frontend: serving SPA from %s", frontend_dir)
 
 
+def _warn_if_dev_libomp_unfixed() -> None:
+    """Dev-only macOS guard against the faiss/torch dual-OpenMP regression.
+
+    ``pip install --upgrade faiss-cpu`` silently replaces faiss's ``libomp.dylib``
+    (which step 01 symlinks onto torch's single image) with faiss's own real copy,
+    reintroducing the macOS dual-OpenMP crash the next time RVC uses faiss and
+    torch together. This is a cheap startup check that names the repair command.
+    Scoped to a dev checkout on macOS — frozen bundles are handled at launch by
+    ``pyi_hooks/rth_faiss_libomp.py``, and the issue does not exist off macOS.
+    """
+    if sys.platform != "darwin" or getattr(sys, "frozen", False):
+        return
+    try:
+        import importlib.util
+
+        spec = importlib.util.find_spec("faiss")
+        origin = getattr(spec, "origin", None) if spec is not None else None
+        if not origin:
+            return
+        libomp = Path(origin).parent / ".dylibs" / "libomp.dylib"
+        # A real file (not a symlink to torch's copy) is the broken state.
+        if libomp.exists() and not libomp.is_symlink():
+            bar = "=" * 76
+            logger.warning(bar)
+            logger.warning("DUAL-OPENMP REGRESSION: faiss ships its own libomp.dylib")
+            logger.warning("  %s", libomp)
+            logger.warning("  is a real file, not a symlink to torch's libomp. RVC (faiss + torch)")
+            logger.warning("  can abort the process on macOS. Repair with:  just setup-python")
+            logger.warning(bar)
+    except Exception as e:  # noqa: BLE001 - a diagnostic must never break startup
+        logger.debug("libomp dev-mode check skipped: %s", e)
+
+
 def _get_gpu_status() -> str:
     """Return a human-readable string describing GPU availability."""
     backend_type = get_backend_type()
@@ -303,7 +336,7 @@ async def _run_startup(application: FastAPI) -> None:
             sa_text(
                 "UPDATE generations SET status = 'failed', "
                 "error = 'Server was shut down during generation' "
-                "WHERE status IN ('generating', 'loading_model')"
+                "WHERE status IN ('generating', 'loading_model', 'converting')"
             )
         )
         if result.rowcount > 0:
@@ -321,6 +354,8 @@ async def _run_startup(application: FastAPI) -> None:
         logger.warning("Could not clean up stale generations: %s", e)
     finally:
         db.close()
+
+    _warn_if_dev_libomp_unfixed()
 
     backend_type = get_backend_type()
     logger.info("Backend: %s", backend_type.upper())

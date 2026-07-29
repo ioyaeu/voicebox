@@ -7,11 +7,16 @@ voice prompt combination, and model loading progress tracking.
 
 import logging
 import platform
+import shutil
+import threading
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Callable, List, Optional, Tuple
+from typing import TYPE_CHECKING, Callable, List, Optional, Tuple
 
 import numpy as np
+
+if TYPE_CHECKING:
+    from . import ModelConfig
 
 from ..utils.audio import normalize_audio, load_audio
 from ..utils.progress import get_progress_manager
@@ -75,6 +80,158 @@ def is_model_cached(
     except Exception as e:
         logger.warning(f"Error checking cache for {hf_repo}: {e}")
         return False
+
+
+# One-shot relocation of direct-download weights out of the HF cache root is
+# serialized on this lock so concurrent callers (Models-tab status polls, the
+# download flow, the pitch loader) can't race the move.
+_legacy_download_migration_lock = threading.Lock()
+
+
+def get_direct_download_path(config: "ModelConfig") -> Optional[Path]:
+    """Local path for a non-HF registry model (one with ``download_url``).
+
+    Returns ``None`` for HuggingFace-hosted configs. Direct-download models live
+    under the app's own model directory (``config.get_models_dir()``) at
+    ``<model_name>/<file_name>`` — deliberately OUTSIDE the HuggingFace cache
+    root, so first-party downloads (only ``crepe-full`` today) neither pollute
+    that cache nor get swept up by the cache-dir migration flow. A copy left at
+    the legacy in-HF-cache location by an older build is migrated across on first
+    access (one-shot; see ``_migrate_legacy_direct_download``).
+    """
+    if not getattr(config, "download_url", None) or not getattr(config, "file_name", None):
+        return None
+    from ..config import get_models_dir
+
+    dest = get_models_dir() / config.model_name / config.file_name
+    _migrate_legacy_direct_download(config, dest)
+    return dest
+
+
+def _migrate_legacy_direct_download(config: "ModelConfig", dest: Path) -> None:
+    """One-shot move of a direct-download model into the app's model dir.
+
+    Older builds stored direct-download weights inside the HuggingFace cache root
+    at ``HF_HUB_CACHE/<model_name>/<file_name>`` (a workaround so the Models tab's
+    single cache-dir surface covered them). They now live under the app's own
+    model dir. If the file is still only at the legacy location, move it there so
+    an already-downloaded model is never re-fetched. No-ops once ``dest`` exists.
+    """
+    if dest.exists():
+        return
+    from huggingface_hub import constants as hf_constants
+
+    legacy = Path(hf_constants.HF_HUB_CACHE) / config.model_name / config.file_name
+    if not legacy.exists() or legacy.resolve() == dest.resolve():
+        return
+
+    with _legacy_download_migration_lock:
+        # Re-check under the lock: another caller may have migrated already.
+        if dest.exists() or not legacy.exists():
+            return
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            legacy.replace(dest)  # atomic rename within one filesystem
+        except OSError:
+            # Cross-filesystem move: copy to a temp beside dest then swap in
+            # atomically, so a crash mid-copy never leaves a partial dest.
+            tmp = dest.parent / f".{dest.name}.migrating"
+            tmp.unlink(missing_ok=True)
+            shutil.copy2(str(legacy), str(tmp))
+            tmp.replace(dest)
+            legacy.unlink(missing_ok=True)
+        logger.info(
+            "Migrated %s weights out of the HF cache: %s -> %s",
+            config.model_name,
+            legacy,
+            dest,
+        )
+        # Best-effort cleanup of the now-empty legacy model dir.
+        try:
+            legacy.parent.rmdir()
+        except OSError:
+            pass
+
+
+def is_direct_download_cached(config: "ModelConfig") -> bool:
+    """Whether a direct-download model's verified file already exists on disk."""
+    path = get_direct_download_path(config)
+    return path is not None and path.exists()
+
+
+def get_crepe_model_path() -> Optional[Path]:
+    """Single source of truth for the downloaded Crepe ``full.pth`` location.
+
+    Resolved from the ``crepe-full`` registry entry so the download flow, the
+    Models-tab cache check, and the pitch loader all agree on one path. Returns
+    ``None`` only if the registry entry is somehow missing.
+    """
+    from . import get_model_config
+
+    cfg = get_model_config("crepe-full")
+    return get_direct_download_path(cfg) if cfg else None
+
+
+async def download_direct_model(config: "ModelConfig") -> Path:
+    """Download + sha256-verify a non-HF registry model, reporting progress.
+
+    Streams ``config.download_url`` to ``get_direct_download_path(config)`` via a
+    ``.incomplete`` temp file, checks ``config.sha256`` before committing with an
+    atomic rename, and reports progress under ``config.model_name`` so the Models
+    tab SSE tracks it like any HuggingFace download. A hash mismatch (or any
+    error) deletes the partial file and raises — an unverified file is never kept.
+    """
+    import hashlib
+
+    import httpx
+
+    dest = get_direct_download_path(config)
+    if dest is None:
+        raise ValueError(f"{config.model_name} is not a direct-download model")
+    if dest.exists():
+        return dest
+
+    progress_manager = get_progress_manager()
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = dest.parent / f".{dest.name}.incomplete"
+    tmp_path.unlink(missing_ok=True)
+
+    hasher = hashlib.sha256()
+    downloaded = 0
+    try:
+        async with httpx.AsyncClient(follow_redirects=True, timeout=30.0) as client:
+            async with client.stream("GET", config.download_url) as response:
+                response.raise_for_status()
+                total = int(response.headers.get("content-length", 0)) or config.size_mb * 1024 * 1024
+                with open(tmp_path, "wb") as f:
+                    async for chunk in response.aiter_bytes(chunk_size=1024 * 1024):
+                        f.write(chunk)
+                        hasher.update(chunk)
+                        downloaded += len(chunk)
+                        progress_manager.update_progress(
+                            config.model_name,
+                            downloaded,
+                            total,
+                            filename=f"Downloading {config.file_name}",
+                            status="downloading",
+                        )
+        if config.sha256:
+            actual = hasher.hexdigest()
+            if actual != config.sha256:
+                raise ValueError(
+                    f"{config.model_name} integrity check failed: "
+                    f"expected {config.sha256[:16]}..., got {actual[:16]}..."
+                )
+        tmp_path.replace(dest)
+    except Exception as e:
+        progress_manager.mark_error(config.model_name, str(e))
+        raise
+    else:
+        progress_manager.mark_complete(config.model_name)
+    finally:
+        tmp_path.unlink(missing_ok=True)
+
+    return dest
 
 
 def get_torch_device(
@@ -171,7 +328,7 @@ def check_cuda_compatibility() -> tuple[bool, str | None]:
 
 def empty_device_cache(device: str) -> None:
     """
-    Free cached memory on the given device (CUDA or XPU).
+    Free cached memory on the given device (CUDA, XPU, or MPS).
 
     Backends should call this after unloading models so VRAM is returned
     to the OS.
@@ -182,6 +339,8 @@ def empty_device_cache(device: str) -> None:
         torch.cuda.empty_cache()
     elif device == "xpu" and hasattr(torch, "xpu"):
         torch.xpu.empty_cache()
+    elif device == "mps" and hasattr(torch, "mps"):
+        torch.mps.empty_cache()
 
 
 def manual_seed(seed: int, device: str) -> None:

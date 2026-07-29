@@ -12,6 +12,21 @@ from .utils.capture_chords import (
 )
 
 
+class RVCParams(BaseModel):
+    """Per-profile RVC conversion knobs for the TTS->RVC chain.
+
+    Bounds mirror ``ConvertRequest`` (the Voice Changer tab) so the defaults and
+    validation are identical whether audio is converted from an uploaded file or
+    produced by the base TTS voice and converted in the generation chain.
+    """
+
+    f0_up_key: int = Field(default=0, ge=-24, le=24)
+    f0_method: str = Field(default="rmvpe", pattern="^(rmvpe|crepe)$")
+    index_rate: float = Field(default=0.75, ge=0.0, le=1.0)
+    rms_mix_rate: float = Field(default=0.25, ge=0.0, le=1.0)
+    protect: float = Field(default=0.33, ge=0.0, le=1.0)
+
+
 class VoiceProfileCreate(BaseModel):
     """Request model for creating a voice profile."""
 
@@ -20,12 +35,17 @@ class VoiceProfileCreate(BaseModel):
     language: str = Field(
         default="en", pattern="^(zh|en|ja|ko|de|fr|ru|pt|es|it|he|ar|da|el|fi|hi|ms|nl|no|pl|sv|sw|tr)$"
     )
-    voice_type: Optional[str] = Field(default="cloned", pattern="^(cloned|preset|designed)$")
+    voice_type: Optional[str] = Field(default="cloned", pattern="^(cloned|preset|designed|rvc)$")
     preset_engine: Optional[str] = Field(None, max_length=50)
     preset_voice_id: Optional[str] = Field(None, max_length=100)
     design_prompt: Optional[str] = Field(None, max_length=2000)
     default_engine: Optional[str] = Field(None, max_length=50)
     personality: Optional[str] = Field(None, max_length=2000)
+    # RVC TTS->RVC chain settings (rvc profiles only). ``rvc_base_voice`` is
+    # "{engine}:{voice_id}" naming a cloning-free preset voice; ``rvc_params``
+    # are the conversion knobs. Both default server-side when omitted.
+    rvc_base_voice: Optional[str] = Field(None, max_length=200)
+    rvc_params: Optional[RVCParams] = None
 
 
 class VoiceProfileResponse(BaseModel):
@@ -42,6 +62,21 @@ class VoiceProfileResponse(BaseModel):
     preset_voice_id: Optional[str] = None
     design_prompt: Optional[str] = None
     default_engine: Optional[str] = None
+    # True when a validated RVC checkpoint file is present on disk for this
+    # profile. The on-disk storage paths (rvc_model_path/rvc_index_path DB
+    # columns) are internal and intentionally NOT exposed — leaking them told
+    # every client the server's filesystem layout for no benefit.
+    rvc_has_model: bool = False
+    # Base TTS voice and conversion params for the TTS->RVC chain. Populated
+    # with server-side defaults for rvc profiles even when the columns are NULL,
+    # so the profile editor always has sensible values to render.
+    rvc_base_voice: Optional[str] = None
+    rvc_params: Optional[RVCParams] = None
+    # Checkpoint metadata read from the profile's rvc_model.json sidecar,
+    # populated only for rvc profiles that have a model uploaded.
+    rvc_version: Optional[str] = None
+    rvc_sample_rate: Optional[int] = None
+    rvc_f0: Optional[int] = None
     personality: Optional[str] = None
     generation_count: int = 0
     sample_count: int = 0
@@ -85,7 +120,12 @@ class GenerationRequest(BaseModel):
     seed: Optional[int] = Field(None, ge=0)
     model_size: Optional[str] = Field(default="1.7B", pattern="^(1\\.7B|0\\.6B|1B|3B)$")
     instruct: Optional[str] = Field(None, max_length=500)
-    engine: Optional[str] = Field(default="qwen", pattern="^(qwen|qwen_custom_voice|luxtts|chatterbox|chatterbox_turbo|tada|kokoro)$")
+    # Defaults to None (not "qwen") so an omitted engine defers to the profile:
+    # ``_resolve_generation_engine`` then honours the profile's default/preset
+    # engine — critical for rvc profiles, whose base engine the chain resolves
+    # internally. The pattern only applies to non-null strings; "rvc" is allowed
+    # so an rvc profile also works when the client sends engine="rvc" explicitly.
+    engine: Optional[str] = Field(default=None, pattern="^(qwen|qwen_custom_voice|luxtts|chatterbox|chatterbox_turbo|tada|kokoro|voxtral|rvc)$")
     personality: bool = Field(
         default=False,
         description="When true and the profile has a personality prompt, the input text is rewritten in-character before TTS.",
@@ -317,7 +357,7 @@ class MCPClientBindingResponse(BaseModel):
     profile_id: Optional[str] = None
     default_engine: Optional[str] = Field(
         None,
-        pattern="^(qwen|qwen_custom_voice|luxtts|chatterbox|chatterbox_turbo|tada|kokoro)$",
+        pattern="^(qwen|qwen_custom_voice|luxtts|chatterbox|chatterbox_turbo|tada|kokoro|voxtral)$",
     )
     default_personality: bool = False
     last_seen_at: Optional[datetime] = None
@@ -336,7 +376,7 @@ class MCPClientBindingUpsert(BaseModel):
     profile_id: Optional[str] = None
     default_engine: Optional[str] = Field(
         None,
-        pattern="^(qwen|qwen_custom_voice|luxtts|chatterbox|chatterbox_turbo|tada|kokoro)$",
+        pattern="^(qwen|qwen_custom_voice|luxtts|chatterbox|chatterbox_turbo|tada|kokoro|voxtral)$",
     )
     default_personality: bool = False
 
@@ -355,7 +395,7 @@ class SpeakRequest(BaseModel):
     )
     engine: Optional[str] = Field(
         None,
-        pattern="^(qwen|qwen_custom_voice|luxtts|chatterbox|chatterbox_turbo|tada|kokoro)$",
+        pattern="^(qwen|qwen_custom_voice|luxtts|chatterbox|chatterbox_turbo|tada|kokoro|voxtral)$",
     )
     personality: Optional[bool] = Field(
         None,
@@ -442,7 +482,7 @@ class HealthResponse(BaseModel):
     gpu_type: Optional[str] = None  # GPU type (CUDA, MPS, or None)
     vram_used_mb: Optional[float] = None
     backend_type: Optional[str] = None  # Backend type (mlx or pytorch)
-    backend_variant: Optional[str] = None  # Binary variant (cpu, cuda, or rocm)
+    backend_variant: Optional[str] = None  # Runtime/backend variant (cpu, cuda, rocm, xpu, or metal)
     supports_rocm: bool = False  # AMD GPU on Windows — the ROCm backend is applicable
     gpu_compatibility_warning: Optional[str] = None  # Warning if GPU arch unsupported
 
@@ -815,3 +855,107 @@ class CloudStatusResponse(BaseModel):
     key_prefix: Optional[str] = None
     connected_at: Optional[datetime] = None
     dashboard_url: str
+
+
+class ConvertRequest(BaseModel):
+    """Non-file form parameters for ``POST /convert``, validated as a unit.
+
+    The source audio arrives as a separate ``UploadFile``; this model carries
+    the conversion knobs so their bounds are enforced with the same ``Field``
+    constraints used across the rest of the API.
+    """
+
+    profile_id: str = Field(..., min_length=1)
+    f0_up_key: int = Field(default=0, ge=-24, le=24)
+    f0_method: str = Field(default="rmvpe", pattern="^(rmvpe|crepe)$")
+    index_rate: float = Field(default=0.75, ge=0.0, le=1.0)
+    rms_mix_rate: float = Field(default=0.25, ge=0.0, le=1.0)
+    protect: float = Field(default=0.33, ge=0.0, le=1.0)
+
+
+class ConvertResponse(BaseModel):
+    """Response for ``POST /convert`` — the enqueued conversion task.
+
+    ``task_id`` is a generation id: progress is polled through the existing
+    ``GET /generate/{id}/status`` stream (or ``GET /history/{id}``) and the
+    result WAV is served by ``GET /audio/{id}``, exactly like a TTS generation.
+    """
+
+    task_id: str
+    profile_id: str
+    status: str = "generating"
+    created_at: datetime
+
+
+# Major version of the ``WS /convert/stream`` wire protocol (handshake fields +
+# binary audio-frame layout). Bumped only on a *breaking* change; the client
+# sends it in the handshake and the server rejects any version it does not
+# implement before loading a model. See :mod:`backend.routes.convert`.
+STREAM_PROTOCOL_VERSION = 1
+
+
+class StreamHandshakeRequest(BaseModel):
+    """First (JSON text) frame a client sends on ``WS /convert/stream``.
+
+    Mirrors the ``POST /convert`` conversion knobs plus ``block_ms`` — the
+    negotiated per-block size. ``block_ms`` defaults to
+    ``streaming.DEFAULT_BLOCK_MS`` (300); the bounds allow smaller blocks for
+    lower latency and larger ones for CPU testing.
+
+    ``version`` is the protocol major version the client speaks; the server
+    rejects an unrecognised major before loading anything. It defaults to
+    ``STREAM_PROTOCOL_VERSION`` so a client that omits it is treated as speaking
+    the current protocol.
+    """
+
+    version: int = Field(default=STREAM_PROTOCOL_VERSION, ge=1)
+    profile_id: str = Field(..., min_length=1)
+    block_ms: int = Field(default=300, ge=100, le=2000)
+    f0_up_key: int = Field(default=0, ge=-24, le=24)
+    f0_method: str = Field(default="rmvpe", pattern="^(rmvpe|crepe)$")
+    index_rate: float = Field(default=0.75, ge=0.0, le=1.0)
+    rms_mix_rate: float = Field(default=0.25, ge=0.0, le=1.0)
+    protect: float = Field(default=0.33, ge=0.0, le=1.0)
+
+
+class StreamHandshakeReply(BaseModel):
+    """Success reply to a ``WS /convert/stream`` handshake.
+
+    ``version`` echoes the protocol major version the server accepted (always
+    ``STREAM_PROTOCOL_VERSION``). ``block_frame_16k`` is the exact number of
+    little-endian float32 samples the client must place in each binary **input**
+    frame (mono 16 kHz PCM); ``block_frame_sr`` is the number of float32 samples
+    in each converted **output** frame (mono PCM at ``model_sr``).
+    """
+
+    ready: bool = True
+    version: int = STREAM_PROTOCOL_VERSION
+    model_sr: int
+    block_frame_16k: int
+    block_frame_sr: int
+
+
+class StreamHandshakeError(BaseModel):
+    """Rejection reply to a ``WS /convert/stream`` handshake.
+
+    Sent as a JSON text frame immediately before the socket is closed with a
+    policy-violation code, so the client can surface ``error`` to the user.
+    """
+
+    ready: bool = False
+    error: str
+
+
+class StreamErrorFrame(BaseModel):
+    """Mid-stream failure notice sent on ``WS /convert/stream`` after a successful
+    handshake, as a JSON text frame, immediately before the socket is closed.
+
+    Lets the client surface *why* a live conversion stopped (e.g. an inference
+    error) instead of guessing at a bare close. It is distinguished from a binary
+    audio frame by being a text/JSON frame, and from
+    :class:`StreamHandshakeError` by carrying ``type == "error"`` and no
+    ``ready`` field (a handshake never succeeded yet when the latter is sent).
+    """
+
+    type: str = "error"
+    error: str

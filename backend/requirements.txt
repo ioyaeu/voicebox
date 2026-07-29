@@ -60,6 +60,15 @@ numpy>=1.24.0,<2.0
 numba>=0.60.0,<0.61.0
 pedalboard>=0.9.0
 
+# RVC voice conversion (see docs/plans/rvc/)
+faiss-cpu>=1.8.0
+pyworld>=0.3.5
+# Upper-bounded: the crepe f0 loader monkeypatches torchcrepe internals
+# (infer.model/.capacity, load.model, Crepe, predict, filter) — see
+# backends/rvc/pitch.py::_assert_torchcrepe_api, which fails loudly if a future
+# version drops them. Keep the bound and the assertion in sync.
+torchcrepe>=0.0.23,<0.1.0
+
 # HTTP client (for CUDA backend download)
 httpx>=0.27.0
 

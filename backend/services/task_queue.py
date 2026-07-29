@@ -79,7 +79,7 @@ async def _force_fail_if_active(generation_id: str, error: str) -> None:
             gen = db.query(DBGeneration).filter_by(id=generation_id).first()
             if gen is None:
                 return
-            if (gen.status or "completed") not in ("loading_model", "generating"):
+            if (gen.status or "completed") not in ("loading_model", "generating", "converting"):
                 return
             await history.update_generation_status(
                 generation_id=generation_id,

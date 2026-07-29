@@ -159,6 +159,28 @@ def _migrate_profiles(engine, inspector, tables: set[str]) -> None:
         _add_column(engine, "profiles", "default_engine VARCHAR", "default_engine")
     if "personality" not in columns:
         _add_column(engine, "profiles", "personality TEXT", "personality")
+    if "rvc_model_path" not in columns:
+        _add_column(engine, "profiles", "rvc_model_path VARCHAR", "rvc_model_path")
+    if "rvc_index_path" not in columns:
+        _add_column(engine, "profiles", "rvc_index_path VARCHAR", "rvc_index_path")
+    # TTS->RVC chain (Phase C)
+    if "rvc_base_voice" not in columns:
+        _add_column(engine, "profiles", "rvc_base_voice VARCHAR", "rvc_base_voice")
+    if "rvc_params" not in columns:
+        _add_column(engine, "profiles", "rvc_params TEXT", "rvc_params")
+
+    # The external generation contract requires engine == "rvc" for rvc
+    # profiles; the route-level engine resolver lands on that only via the
+    # profile's default_engine. Backfill it for rvc profiles created before the
+    # chain (Phase A) so /generate, /speak and MCP resolve them without a 400.
+    with engine.connect() as conn:
+        conn.execute(
+            text(
+                "UPDATE profiles SET default_engine = 'rvc' "
+                "WHERE voice_type = 'rvc' AND (default_engine IS NULL OR default_engine = '')"
+            )
+        )
+        conn.commit()
 
 
 def _migrate_generations(engine, inspector, tables: set[str]) -> None:
@@ -305,6 +327,11 @@ def _normalize_storage_paths(engine, tables: set[str]) -> None:
         ("generation_versions", "audio_path"),
         ("profile_samples", "audio_path"),
         ("profiles", "avatar_path"),
+        # RVC artifacts are internal (no longer exposed on the response) but are
+        # still stored per-profile; normalize them too so a moved data dir
+        # re-resolves the checkpoint/index instead of stranding them.
+        ("profiles", "rvc_model_path"),
+        ("profiles", "rvc_index_path"),
     ]
 
     total_fixed = 0
