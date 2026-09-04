@@ -199,6 +199,68 @@ fn check_health(port: u16) -> bool {
     }
 }
 
+#[cfg(unix)]
+fn get_process_command(pid: u32) -> Option<String> {
+    use std::process::Command;
+
+    let output = Command::new("ps")
+        .args(["-p", &pid.to_string(), "-o", "command="])
+        .output()
+        .ok()?;
+
+    if !output.status.success() {
+        return None;
+    }
+
+    let command = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if command.is_empty() {
+        None
+    } else {
+        Some(command)
+    }
+}
+
+#[cfg(unix)]
+fn extract_parent_pid(command: &str) -> Option<u32> {
+    let mut parts = command.split_whitespace();
+    while let Some(part) = parts.next() {
+        if part == "--parent-pid" {
+            return parts.next().and_then(|value| value.parse::<u32>().ok());
+        }
+        if let Some(value) = part.strip_prefix("--parent-pid=") {
+            return value.parse::<u32>().ok();
+        }
+    }
+    None
+}
+
+#[cfg(unix)]
+fn is_process_alive(pid: u32) -> bool {
+    use std::process::Command;
+
+    Command::new("ps")
+        .args(["-p", &pid.to_string()])
+        .output()
+        .map(|output| output.status.success())
+        .unwrap_or(false)
+}
+
+#[cfg(unix)]
+fn kill_process_group_and_pid(pid: u32) {
+    use std::process::Command;
+
+    let _ = Command::new("kill")
+        .args(["-TERM", "--", &format!("-{}", pid)])
+        .output();
+    std::thread::sleep(std::time::Duration::from_millis(100));
+    let _ = Command::new("kill")
+        .args(["-9", "--", &format!("-{}", pid)])
+        .output();
+    let _ = Command::new("kill")
+        .args(["-9", &pid.to_string()])
+        .output();
+}
+
 struct ServerState {
     child: Mutex<Option<tauri_plugin_shell::process::CommandChild>>,
     server_pid: Mutex<Option<u32>>,
@@ -283,11 +345,23 @@ async fn start_server(
         return Ok(format!("http://127.0.0.1:{}", SERVER_PORT));
     }
 
+    // Get app data directory early so port reuse can tell intentional
+    // keep-running sessions from orphaned sidecars left by a crashed/closed app.
+    let data_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("Failed to get app data dir: {}", e))?;
+
+    // Ensure data directory exists
+    std::fs::create_dir_all(&data_dir)
+        .map_err(|e| format!("Failed to create data dir: {}", e))?;
+
     // Check if a voicebox server is already running on our port (from previous session with keep_running=true,
     // or an externally started server e.g. via `python`, `uvicorn`, Docker, etc.)
     #[cfg(unix)]
     {
         use std::process::Command;
+        let mut killed_orphan = false;
         if let Ok(output) = Command::new("lsof")
             .args(["-i", &format!(":{}", SERVER_PORT), "-sTCP:LISTEN"])
             .output()
@@ -300,6 +374,20 @@ async fn start_server(
                     let pid_str = parts[1];
                     if command.contains("voicebox") {
                         if let Ok(pid) = pid_str.parse::<u32>() {
+                            if let Some(process_command) = get_process_command(pid) {
+                                if let Some(parent_pid) = extract_parent_pid(&process_command) {
+                                    let keep_running_sentinel = data_dir.join(".keep-running");
+                                    if !is_process_alive(parent_pid) && !keep_running_sentinel.exists() {
+                                        println!(
+                                            "Found orphaned voicebox-server on port {} (PID: {}, parent PID {} is gone), killing it before restart",
+                                            SERVER_PORT, pid, parent_pid
+                                        );
+                                        kill_process_group_and_pid(pid);
+                                        killed_orphan = true;
+                                        continue;
+                                    }
+                                }
+                            }
                             println!("Found existing voicebox-server on port {} (PID: {}), reusing it", SERVER_PORT, pid);
                             // Store the PID so we can kill it on exit if needed
                             *state.server_pid.lock().unwrap() = Some(pid);
@@ -322,6 +410,9 @@ async fn start_server(
                     }
                 }
             }
+        }
+        if killed_orphan {
+            std::thread::sleep(std::time::Duration::from_millis(300));
         }
     }
     
@@ -405,16 +496,6 @@ async fn start_server(
     
     // Brief wait for port to be released
     std::thread::sleep(std::time::Duration::from_millis(200));
-
-    // Get app data directory
-    let data_dir = app
-        .path()
-        .app_data_dir()
-        .map_err(|e| format!("Failed to get app data dir: {}", e))?;
-
-    // Ensure data directory exists
-    std::fs::create_dir_all(&data_dir)
-        .map_err(|e| format!("Failed to create data dir: {}", e))?;
 
     println!("=================================================================");
     println!("Starting voicebox-server sidecar");

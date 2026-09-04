@@ -10,6 +10,10 @@ import { debug } from '@/lib/utils/debug';
 import { usePlatform } from '@/platform/PlatformContext';
 import { usePlayerStore } from '@/stores/playerStore';
 
+type WaveSurferWebAudioElement = HTMLMediaElement & {
+  getGainNode?: () => GainNode | null;
+};
+
 export function AudioPlayer() {
   const platform = usePlatform();
   const volumeLabelId = useId();
@@ -72,18 +76,26 @@ export function AudioPlayer() {
   const isUsingNativePlaybackRef = useRef(false);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [wsReady, setWsReady] = useState(false);
 
-  // Create WaveSurfer once when the player becomes visible (audioUrl is set).
-  // This instance is reused for all subsequent audio loads - never destroyed until unmount.
+  // Create a fresh WaveSurfer instance for each audio URL. Reusing one WebAudio
+  // graph across long generated files can leave WKWebView with a stuck player:
+  // duration is known, but playback and waveform rendering go silent.
   useEffect(() => {
-    if (!audioUrl) return;
-    if (wavesurferRef.current) return; // already created
+    if (!audioUrl) {
+      return;
+    }
+
+    let cancelled = false;
+    let rafId: number | null = null;
+    let retryTimer: number | null = null;
+    let wavesurferForUrl: WaveSurfer | null = null;
 
     const initWaveSurfer = () => {
+      if (cancelled) return;
+
       const container = waveformRef.current;
       if (!container) {
-        setTimeout(initWaveSurfer, 50);
+        retryTimer = window.setTimeout(initWaveSurfer, 50);
         return;
       }
 
@@ -96,7 +108,7 @@ export function AudioPlayer() {
         style.visibility !== 'hidden';
 
       if (!isVisible) {
-        setTimeout(initWaveSurfer, 50);
+        retryTimer = window.setTimeout(initWaveSurfer, 50);
         return;
       }
 
@@ -127,6 +139,9 @@ export function AudioPlayer() {
           mediaControls: false,
           backend: 'WebAudio',
         });
+
+        wavesurferForUrl = wavesurfer;
+        wavesurferRef.current = wavesurfer;
 
         // Wire up event handlers (these persist for the lifetime of the instance)
         wavesurfer.on('timeupdate', (time) => {
@@ -180,7 +195,7 @@ export function AudioPlayer() {
         // Mute audio during drag-to-seek to prevent popping from the WebAudio
         // backend's hard stop/start cycle on each seek. Unmute with a short
         // fade-in when the drag ends.
-        const seekMedia = wavesurfer.getMediaElement() as any;
+        const seekMedia = wavesurfer.getMediaElement() as WaveSurferWebAudioElement;
         const seekGain: GainNode | null = seekMedia?.getGainNode?.() ?? null;
         if (seekGain) {
           const ctx = seekGain.context as AudioContext;
@@ -216,9 +231,33 @@ export function AudioPlayer() {
           if (percent === 100) setIsLoading(false);
         });
 
-        wavesurferRef.current = wavesurfer;
-        setWsReady(true);
         debug.log('WaveSurfer created successfully');
+
+        // Reset native playback state
+        isUsingNativePlaybackRef.current = false;
+        wavesurfer.setMuted(false);
+        wavesurfer.setVolume(usePlayerStore.getState().volume);
+
+        loadingRef.current = true;
+        setIsLoading(true);
+        setError(null);
+        setCurrentTime(0);
+        setDuration(0);
+
+        wavesurfer
+          .load(audioUrl)
+          .then(() => {
+            if (cancelled) return;
+            debug.log('Audio loaded into WaveSurfer');
+            loadingRef.current = false;
+          })
+          .catch((err) => {
+            if (cancelled) return;
+            debug.error('Failed to load audio:', err);
+            loadingRef.current = false;
+            setIsLoading(false);
+            setError(`Failed to load audio: ${err instanceof Error ? err.message : String(err)}`);
+          });
       } catch (err) {
         debug.error('Failed to create WaveSurfer:', err);
         setError(
@@ -227,17 +266,31 @@ export function AudioPlayer() {
       }
     };
 
-    let rafId: number;
     rafId = requestAnimationFrame(() => {
       initWaveSurfer();
     });
 
     return () => {
-      cancelAnimationFrame(rafId);
+      cancelled = true;
+      if (rafId !== null) {
+        cancelAnimationFrame(rafId);
+      }
+      if (retryTimer !== null) {
+        window.clearTimeout(retryTimer);
+      }
+      loadingRef.current = false;
+      setIsLoading(false);
+
+      if (wavesurferForUrl && wavesurferRef.current === wavesurferForUrl) {
+        debug.log('Destroying WaveSurfer instance (audio URL changed)');
+        try {
+          wavesurferForUrl.destroy();
+        } catch (err) {
+          debug.error('Error destroying WaveSurfer:', err);
+        }
+        wavesurferRef.current = null;
+      }
     };
-    // Only run on mount-like conditions. audioUrl is here so we create the instance
-    // when the player first appears, but we guard against re-creation above.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [audioUrl, setIsPlaying, setDuration, setCurrentTime]);
 
   // Destroy WaveSurfer only on unmount
@@ -251,66 +304,9 @@ export function AudioPlayer() {
           debug.error('Error destroying WaveSurfer:', err);
         }
         wavesurferRef.current = null;
-        setWsReady(false);
       }
     };
   }, []);
-
-  // Load audio when URL changes (reuses the existing WaveSurfer instance)
-  useEffect(() => {
-    const wavesurfer = wavesurferRef.current;
-    if (!wavesurfer || !wsReady) return;
-
-    if (!audioUrl) {
-      // No audio - pause and reset
-      wavesurfer.pause();
-      wavesurfer.seekTo(0);
-      loadingRef.current = false;
-      setIsLoading(false);
-      setDuration(0);
-      setCurrentTime(0);
-      setError(null);
-      isUsingNativePlaybackRef.current = false;
-      return;
-    }
-
-    // Reset native playback state
-    isUsingNativePlaybackRef.current = false;
-    wavesurfer.setMuted(false);
-    wavesurfer.setVolume(usePlayerStore.getState().volume);
-
-    // Stop current playback and reset position before loading new audio.
-    // With the WebAudio backend, pause() accumulates playedDuration internally.
-    // seekTo(0) resets it so the new track starts from the beginning.
-    debug.log('Loading new audio URL:', audioUrl);
-    try {
-      if (wavesurfer.isPlaying()) {
-        wavesurfer.pause();
-      }
-      wavesurfer.seekTo(0);
-    } catch (err) {
-      debug.error('Error resetting before load:', err);
-    }
-
-    loadingRef.current = true;
-    setIsLoading(true);
-    setError(null);
-    setCurrentTime(0);
-    setDuration(0);
-
-    wavesurfer
-      .load(audioUrl)
-      .then(() => {
-        debug.log('Audio loaded into WaveSurfer');
-        loadingRef.current = false;
-      })
-      .catch((err) => {
-        debug.error('Failed to load audio:', err);
-        loadingRef.current = false;
-        setIsLoading(false);
-        setError(`Failed to load audio: ${err instanceof Error ? err.message : String(err)}`);
-      });
-  }, [audioUrl, wsReady, setCurrentTime, setDuration]);
 
   // Sync play/pause state (only when user clicks play/pause button, not auto-sync)
   // This effect is kept for external state changes but should be minimal
@@ -580,11 +576,7 @@ export function AudioPlayer() {
           </Button>
 
           {/* Volume Control */}
-          <div
-            className="flex items-center gap-2 shrink-0 w-[120px]"
-            role="group"
-            aria-label="Volume"
-          >
+          <fieldset className="flex items-center gap-2 shrink-0 w-[120px]" aria-label="Volume">
             <Button
               variant="ghost"
               size="icon"
@@ -606,7 +598,7 @@ export function AudioPlayer() {
               aria-labelledby={volumeLabelId}
               aria-valuetext={`${Math.round(volume * 100)}%`}
             />
-          </div>
+          </fieldset>
 
           {/* Close Button */}
           <Button
