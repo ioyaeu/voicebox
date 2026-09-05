@@ -337,10 +337,14 @@ def _get_tada_model_configs() -> list[ModelConfig]:
 
 
 def _get_non_qwen_tts_configs() -> list[ModelConfig]:
-    """Return model configs for non-Qwen TTS engines.
+    """Return model configs for non-Qwen TTS engines."""
+    backend_type = get_backend_type()
+    chatterbox_on_mlx = backend_type == "mlx"
+    chatterbox_repo = (
+        "mlx-community/chatterbox-multilingual-v3" if chatterbox_on_mlx else "ResembleAI/chatterbox"
+    )
+    chatterbox_size_mb = 2600 if chatterbox_on_mlx else 3200
 
-    These are static — no backend-type branching needed.
-    """
     return [
         ModelConfig(
             model_name="luxtts",
@@ -354,9 +358,10 @@ def _get_non_qwen_tts_configs() -> list[ModelConfig]:
             model_name="chatterbox-tts",
             display_name="Chatterbox TTS (Multilingual)",
             engine="chatterbox",
-            hf_repo_id="ResembleAI/chatterbox",
-            size_mb=3200,
+            hf_repo_id=chatterbox_repo,
+            size_mb=chatterbox_size_mb,
             needs_trim=True,
+            retries_runaway=chatterbox_on_mlx,
             languages=[
                 "zh",
                 "en",
@@ -829,9 +834,14 @@ def get_tts_backend_for_engine(engine: str) -> TTSBackend:
 
             backend = LuxTTSBackend()
         elif engine == "chatterbox":
-            from .chatterbox_backend import ChatterboxTTSBackend
+            if get_backend_type() == "mlx":
+                from .chatterbox_mlx_backend import ChatterboxMLXTTSBackend
 
-            backend = ChatterboxTTSBackend()
+                backend = ChatterboxMLXTTSBackend()
+            else:
+                from .chatterbox_backend import ChatterboxTTSBackend
+
+                backend = ChatterboxTTSBackend()
         elif engine == "chatterbox_turbo":
             from .chatterbox_turbo_backend import ChatterboxTurboTTSBackend
 

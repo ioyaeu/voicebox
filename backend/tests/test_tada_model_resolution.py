@@ -1,5 +1,6 @@
 from backend import backends
 from backend.backends import ModelConfig
+from backend.backends.chatterbox_mlx_backend import CHATTERBOX_MLX_HF_REPO, ChatterboxMLXTTSBackend
 from backend.backends.mlx_tada_backend import MLX_TADA_3B_REPO, MLXTadaBackend
 
 
@@ -58,3 +59,36 @@ def test_tada_download_loader_uses_config_model_size(monkeypatch):
     load_func()
 
     assert calls == ["3B"]
+
+
+def test_chatterbox_config_uses_mlx_repo_on_apple_silicon(monkeypatch):
+    monkeypatch.setattr(backends, "get_backend_type", lambda: "mlx")
+
+    cfg = backends.get_model_config("chatterbox-tts")
+
+    assert cfg is not None
+    assert cfg.engine == "chatterbox"
+    assert cfg.hf_repo_id == CHATTERBOX_MLX_HF_REPO
+    assert cfg.retries_runaway is True
+
+
+def test_chatterbox_config_keeps_pytorch_repo_off_mlx(monkeypatch):
+    monkeypatch.setattr(backends, "get_backend_type", lambda: "pytorch")
+
+    cfg = backends.get_model_config("chatterbox-tts")
+
+    assert cfg is not None
+    assert cfg.hf_repo_id == "ResembleAI/chatterbox"
+    assert cfg.retries_runaway is False
+
+
+def test_chatterbox_backend_resolves_to_mlx_backend_on_apple_silicon(monkeypatch):
+    monkeypatch.setattr(backends, "get_backend_type", lambda: "mlx")
+    backends._tts_backends.pop("chatterbox", None)
+
+    try:
+        backend = backends.get_tts_backend_for_engine("chatterbox")
+    finally:
+        backends._tts_backends.pop("chatterbox", None)
+
+    assert isinstance(backend, ChatterboxMLXTTSBackend)

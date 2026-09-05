@@ -7,6 +7,7 @@ import time
 import numpy as np
 import pytest
 
+from backend.backends.chatterbox_mlx_backend import ChatterboxMLXTTSBackend
 from backend.backends.mlx_backend import (
     MLXSTTBackend,
     MLXTTSBackend,
@@ -305,5 +306,31 @@ class TestMLXThreadAffinity:
 
         assert audio.shape == (16,)
         assert sample_rate == VOXTRAL_SAMPLE_RATE
+        assert backend.model is None
+        assert len(seen_thread_ids) == 1
+
+    @pytest.mark.asyncio
+    async def test_chatterbox_mlx_unload_waits_for_generation(self, monkeypatch):
+        backend = ChatterboxMLXTTSBackend()
+        seen_thread_ids: set[int] = set()
+
+        def fake_load_model_sync() -> None:
+            seen_thread_ids.add(threading.get_ident())
+            backend.model = _StreamingAudioModel(backend)
+
+        def fake_unload_model_sync() -> None:
+            seen_thread_ids.add(threading.get_ident())
+            backend.model = None
+
+        monkeypatch.setattr(backend, "_load_model_sync", fake_load_model_sync)
+        monkeypatch.setattr(backend, "_unload_model_sync", fake_unload_model_sync)
+
+        task = asyncio.create_task(backend.generate("bonjour", {"ref_audio": None}, language="fr"))
+        await asyncio.sleep(0.005)
+        await asyncio.to_thread(backend.unload_model)
+        audio, sample_rate = await task
+
+        assert audio.shape == (16,)
+        assert sample_rate == 24000
         assert backend.model is None
         assert len(seen_thread_ids) == 1
