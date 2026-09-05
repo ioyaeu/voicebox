@@ -3,6 +3,7 @@
 
 # Keep MLX pinned with the mlx-audio 0.4.3 stack validated on Apple Silicon.
 mlx==0.31.2
+mlx-tada==0.1.1
 numpy>=1.24.0,<2.0
 
 # mlx-audio itself is installed --no-deps (see comment below), so runtime

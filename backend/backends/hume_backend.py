@@ -101,7 +101,7 @@ class HumeTadaBackend:
 
     def _load_model_sync(self, model_size: str = "1B"):
         """Synchronous model loading with progress tracking."""
-        model_name = f"tada-{model_size.lower()}"
+        model_name = "tada-3b-ml" if model_size == "3B" else "tada-1b"
         is_cached = self._is_model_cached(model_size)
         repo = TADA_MODEL_REPOS.get(model_size, TADA_1B_REPO)
 
