@@ -54,6 +54,13 @@ _CHUNK_PARAMS_FP16 = (3, 10, 60, 65)
 _CHUNK_PARAMS_FP32 = (1, 6, 38, 41)
 
 
+def _resize_features_to_frame_count(feats: torch.Tensor, frame_count: int) -> torch.Tensor:
+    """Align ContentVec frames to the synthesizer's 100 Hz hop grid."""
+    if feats.shape[1] == frame_count:
+        return feats
+    return F.interpolate(feats.permute(0, 2, 1), size=frame_count).permute(0, 2, 1)
+
+
 def _change_rms(
     data1: np.ndarray, sr1: int, data2: np.ndarray, sr2: int, rate: float
 ) -> np.ndarray:
@@ -506,20 +513,17 @@ class RVCPipeline:
                 + (1 - index_rate) * feats
             )  # pipeline.py:242-245
 
-        feats = F.interpolate(feats.permute(0, 2, 1), scale_factor=2).permute(
-            0, 2, 1
-        )  # pipeline.py:247 — 50 Hz -> 100 Hz to match the 160-sample hop
-        if protect < 0.5 and pitch is not None and pitchf is not None:
-            feats0 = F.interpolate(feats0.permute(0, 2, 1), scale_factor=2).permute(
-                0, 2, 1
-            )  # pipeline.py:249-251
-
         p_len = audio0.shape[0] // _WINDOW  # pipeline.py:253
-        if feats.shape[1] < p_len:  # pipeline.py:254-258
-            p_len = feats.shape[1]
-            if pitch is not None and pitchf is not None:
-                pitch = pitch[:, :p_len]
-                pitchf = pitchf[:, :p_len]
+        # Upstream assumes ContentVec emits exactly 50 Hz frames, so 2x
+        # interpolation lands on the synthesizer's 100 Hz grid. The transformers
+        # HuBERT path can be shorter/longer by model revision or framing rules;
+        # matching the audio-derived frame count keeps conversion duration stable.
+        feats = _resize_features_to_frame_count(feats, p_len)
+        if protect < 0.5 and pitch is not None and pitchf is not None:
+            feats0 = _resize_features_to_frame_count(feats0, p_len)
+        if pitch is not None and pitchf is not None:
+            pitch = pitch[:, :p_len]
+            pitchf = pitchf[:, :p_len]
 
         if protect < 0.5 and pitch is not None and pitchf is not None:
             # Restore unvoiced/near-silent frames from the pre-retrieval feats
