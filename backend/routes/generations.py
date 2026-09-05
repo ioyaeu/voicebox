@@ -98,7 +98,7 @@ async def generate_speech(
     if not profile:
         raise HTTPException(status_code=404, detail="Profile not found")
 
-    from ..backends import engine_has_model_sizes
+    from ..backends import engine_has_model_sizes, resolve_model_size_for_engine
 
     try:
         engine = _resolve_generation_engine(data, profile)
@@ -107,7 +107,7 @@ async def generate_speech(
         raise HTTPException(status_code=400, detail=str(e))
     _raise_if_realtime_stream_active()
 
-    model_size = (data.model_size or "1.7B") if engine_has_model_sizes(engine) else None
+    model_size = resolve_model_size_for_engine(engine, data.model_size, data.language)
 
     text = data.text
     source = "manual"
@@ -364,6 +364,7 @@ async def stream_speech(
         ensure_model_cached_or_raise,
         get_tts_backend_for_engine,
         load_engine_model,
+        resolve_model_size_for_engine,
     )
 
     profile = await profiles.get_profile(data.profile_id, db)
@@ -378,7 +379,7 @@ async def stream_speech(
     _raise_if_realtime_stream_active()
 
     tts_model = get_tts_backend_for_engine(engine)
-    model_size = data.model_size or "1.7B"
+    model_size = resolve_model_size_for_engine(engine, data.model_size, data.language) or "default"
 
     await ensure_model_cached_or_raise(engine, model_size)
     await load_engine_model(engine, model_size)

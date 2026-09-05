@@ -24,7 +24,7 @@ import { cn } from '@/lib/utils/cn';
 import { useGenerationStore } from '@/stores/generationStore';
 import { useStoryStore } from '@/stores/storyStore';
 import { useUIStore } from '@/stores/uiStore';
-import { EngineModelSelector } from './EngineModelSelector';
+import { EngineModelSelector, resolveModelSizeForEngine } from './EngineModelSelector';
 import { ParalinguisticInput } from './ParalinguisticInput';
 
 interface FloatingGenerateBoxProps {
@@ -159,11 +159,11 @@ export function FloatingGenerateBox({
     | 'voxtral'
     | 'qwen_custom_voice';
   useEffect(() => {
-    if (selectedProfile?.language) {
-      form.setValue('language', selectedProfile.language as LanguageCode);
-    }
     // Auto-switch engine to match the profile.
     if (selectedProfile?.voice_type === 'rvc') {
+      if (selectedProfile.language) {
+        form.setValue('language', selectedProfile.language as LanguageCode);
+      }
       // RVC owns its base engine server-side (the request sends engine=null and
       // "rvc" isn't a valid form engine). Keep a non-preset TTS engine selected
       // so the form stays valid and the profile picker treats rvc voices as
@@ -176,8 +176,24 @@ export function FloatingGenerateBox({
     } else if (selectedProfile) {
       const engine = selectedProfile.default_engine ?? selectedProfile.preset_engine;
       if (engine) {
+        const profileLanguage = selectedProfile.language as LanguageCode;
+        const modelSize = resolveModelSizeForEngine(
+          engine,
+          form.getValues('modelSize'),
+          profileLanguage,
+        );
+        const languageOptions = getLanguageOptionsForEngine(engine, modelSize);
+        const language = languageOptions.some((option) => option.value === profileLanguage)
+          ? profileLanguage
+          : languageOptions[0]?.value || 'en';
+
         form.setValue('engine', engine as EngineValue);
+        form.setValue('modelSize', modelSize);
+        form.setValue('language', language);
       } else if (selectedProfile.voice_type !== 'preset') {
+        if (selectedProfile.language) {
+          form.setValue('language', selectedProfile.language as LanguageCode);
+        }
         // Cloned/designed profile with no default — ensure a compatible (non-preset) engine
         const currentEngine = form.getValues('engine');
         const presetEngines = new Set(['kokoro', 'qwen_custom_voice', 'voxtral']);
@@ -436,13 +452,19 @@ export function FloatingGenerateBox({
                                         ? 'bg-accent text-accent-foreground border border-accent hover:bg-accent/90'
                                         : 'bg-card border border-border hover:bg-background/50',
                                     )}
-                                    aria-label={active ? t('generation.persona.ariaLabelActive') : t('generation.persona.ariaLabelInactive')}
+                                    aria-label={
+                                      active
+                                        ? t('generation.persona.ariaLabelActive')
+                                        : t('generation.persona.ariaLabelInactive')
+                                    }
                                     aria-pressed={active}
                                   >
                                     <Wand2 className="h-4 w-4" />
                                   </Button>
                                   <span className="pointer-events-none absolute bottom-full left-1/2 -translate-x-1/2 mb-2 whitespace-nowrap rounded-md bg-popover px-3 py-1.5 text-xs text-popover-foreground border border-border opacity-0 transition-opacity group-hover:opacity-100 z-[9999]">
-                                    {active ? t('generation.persona.tooltipActive') : t('generation.persona.tooltipInactive')}
+                                    {active
+                                      ? t('generation.persona.tooltipActive')
+                                      : t('generation.persona.tooltipInactive')}
                                   </span>
                                 </div>
                               </FormControl>
@@ -584,7 +606,6 @@ export function FloatingGenerateBox({
                     </div>
                   )}
 
-
                   <FormField
                     control={form.control}
                     name="language"
@@ -594,10 +615,29 @@ export function FloatingGenerateBox({
                       const langEngine = isRvcProfile
                         ? selectedProfile?.rvc_base_voice?.split(':')[0] || 'kokoro'
                         : form.watch('engine') || 'qwen';
-                      const engineLangs = getLanguageOptionsForEngine(langEngine);
+                      const engineLangs = getLanguageOptionsForEngine(
+                        langEngine,
+                        isRvcProfile ? undefined : form.watch('modelSize'),
+                      );
                       return (
                         <FormItem className="flex-1 space-y-0">
-                          <Select onValueChange={field.onChange} value={field.value}>
+                          <Select
+                            onValueChange={(value) => {
+                              field.onChange(value);
+                              const currentEngine = form.getValues('engine');
+                              if (currentEngine === 'tada') {
+                                form.setValue(
+                                  'modelSize',
+                                  resolveModelSizeForEngine(
+                                    currentEngine,
+                                    form.getValues('modelSize'),
+                                    value,
+                                  ),
+                                );
+                              }
+                            }}
+                            value={field.value}
+                          >
                             <FormControl>
                               <SelectTrigger className="h-8 text-xs bg-card border-border rounded-full hover:bg-background/50 transition-all">
                                 <SelectValue />
@@ -626,7 +666,7 @@ export function FloatingGenerateBox({
                         <span className="truncate">{t('generation.rvcBaseVoice')}</span>
                       </div>
                     ) : (
-                      <EngineModelSelector form={form} compact />
+                      <EngineModelSelector form={form} compact selectedProfile={selectedProfile} />
                     )}
                   </FormItem>
 

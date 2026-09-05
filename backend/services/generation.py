@@ -211,11 +211,11 @@ class _ChainStageError(Exception):
         super().__init__(f"{stage} stage: {original}")
 
 
-def _resolve_base_model_size(base_engine: str) -> str:
+def _resolve_base_model_size(base_engine: str, language: str | None = None) -> str:
     """Pick the model size to load for a chained base-TTS engine.
 
     Single-model engines (kokoro, chatterbox, …) use ``"default"``. For
-    multi-size engines (currently only ``qwen_custom_voice``) the old code
+    multi-size engines (Qwen, Qwen CustomVoice, TADA) the old code
     hardcoded ``"1.7B"``, which forced a multi-GB download even when the user
     already had the smaller variant installed. Prefer an already-cached size;
     fall back to the first configured size so a fresh install still resolves to a
@@ -225,6 +225,7 @@ def _resolve_base_model_size(base_engine: str) -> str:
         engine_has_model_sizes,
         get_tts_backend_for_engine,
         get_tts_model_configs,
+        resolve_model_size_for_engine,
     )
 
     if not engine_has_model_sizes(base_engine):
@@ -236,11 +237,13 @@ def _resolve_base_model_size(base_engine: str) -> str:
 
     backend = get_tts_backend_for_engine(base_engine)
     for cfg in configs:
+        if language and language not in cfg.languages:
+            continue
         if backend._is_model_cached(cfg.model_size):
             return cfg.model_size
     # None installed yet: use the first configured size; the download flow (and
     # the frontend dialog) handle fetching it.
-    return configs[0].model_size
+    return resolve_model_size_for_engine(base_engine, language=language) or configs[0].model_size
 
 
 def _resolve_base_profile_engine(base_profile) -> str:
@@ -368,7 +371,7 @@ async def _generate_rvc_chained(
             if not base_model.is_loaded():
                 await history.update_generation_status(generation_id, "loading_model", bg_db)
 
-            base_model_size = _resolve_base_model_size(base_engine)
+            base_model_size = _resolve_base_model_size(base_engine, language)
             await load_engine_model(base_engine, base_model_size)
 
             if base_is_profile:

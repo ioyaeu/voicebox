@@ -615,6 +615,40 @@ def engine_has_model_sizes(engine: str) -> bool:
     return len(configs) > 1
 
 
+def resolve_model_size_for_engine(
+    engine: str,
+    model_size: str | None = None,
+    language: str | None = None,
+) -> str | None:
+    """Resolve a valid model size for an engine/language combination.
+
+    Request payloads carry one shared ``model_size`` field for all engines, so a
+    stale UI value like ``"1.7B"`` can otherwise leak into TADA. Prefer the
+    language-compatible configured variant; for TADA this keeps non-English
+    generations on the multilingual 3B model.
+    """
+    configs = [c for c in get_tts_model_configs() if c.engine == engine]
+    if len(configs) <= 1:
+        return None
+
+    requested_config = next((c for c in configs if c.model_size == model_size), None)
+    normalized_language = (language or "").strip().lower()
+
+    if normalized_language:
+        if requested_config and normalized_language in requested_config.languages:
+            return requested_config.model_size
+        for cfg in configs:
+            if normalized_language in cfg.languages:
+                return cfg.model_size
+        if engine == "tada" and normalized_language != "en":
+            return "3B"
+
+    if requested_config:
+        return requested_config.model_size
+
+    return configs[0].model_size
+
+
 async def load_engine_model(engine: str, model_size: str = "default") -> None:
     """Load a model for the given engine, handling engines with multiple model sizes."""
     backend = get_tts_backend_for_engine(engine)
