@@ -348,7 +348,10 @@ export interface ModelProgress {
 export interface ModelStatus {
   model_name: string;
   display_name: string;
+  engine: string;
   hf_repo_id?: string; // HuggingFace repository ID
+  model_size: string;
+  languages: string[];
   downloaded: boolean;
   downloading: boolean; // True if download is in progress
   size_mb?: number;

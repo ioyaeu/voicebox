@@ -408,19 +408,20 @@ export function ModelManagement() {
     setDetailOpen(true);
   };
 
+  const voiceEngines = new Set([
+    'qwen',
+    'qwen_custom_voice',
+    'luxtts',
+    'chatterbox',
+    'chatterbox_turbo',
+    'tada',
+    'kokoro',
+    'voxtral',
+  ]);
   const voiceModels =
-    modelStatus?.models.filter(
-      (m) =>
-        m.model_name.startsWith('qwen-tts') ||
-        m.model_name.startsWith('qwen-custom-voice') ||
-        m.model_name.startsWith('luxtts') ||
-        m.model_name.startsWith('chatterbox') ||
-        m.model_name.startsWith('tada') ||
-        m.model_name.startsWith('kokoro') ||
-        m.model_name.startsWith('voxtral'),
-    ) ?? [];
-  const whisperModels = modelStatus?.models.filter((m) => m.model_name.startsWith('whisper')) ?? [];
-  const llmModels = modelStatus?.models.filter((m) => m.model_name.startsWith('qwen3-')) ?? [];
+    modelStatus?.models.filter((m) => voiceEngines.has(m.engine)) ?? [];
+  const whisperModels = modelStatus?.models.filter((m) => m.engine === 'whisper') ?? [];
+  const llmModels = modelStatus?.models.filter((m) => m.engine === 'qwen_llm') ?? [];
 
   // Build sections
   const sections: { label: string; models: ModelStatus[] }[] = [

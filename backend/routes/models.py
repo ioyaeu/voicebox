@@ -299,7 +299,10 @@ async def get_model_status():
                     models.ModelStatus(
                         model_name=config["model_name"],
                         display_name=config["display_name"],
+                        engine=cfg.engine,
                         hf_repo_id=config["hf_repo_id"] or None,
+                        model_size=cfg.model_size,
+                        languages=cfg.languages,
                         downloaded=downloaded,
                         downloading=is_downloading,
                         size_mb=size_mb,
@@ -390,7 +393,10 @@ async def get_model_status():
                 models.ModelStatus(
                     model_name=config["model_name"],
                     display_name=config["display_name"],
+                    engine=config["config"].engine,
                     hf_repo_id=config["hf_repo_id"],
+                    model_size=config["config"].model_size,
+                    languages=config["config"].languages,
                     downloaded=downloaded,
                     downloading=is_downloading,
                     size_mb=size_mb,
@@ -409,7 +415,10 @@ async def get_model_status():
                 models.ModelStatus(
                     model_name=config["model_name"],
                     display_name=config["display_name"],
+                    engine=config["config"].engine,
                     hf_repo_id=config["hf_repo_id"],
+                    model_size=config["config"].model_size,
+                    languages=config["config"].languages,
                     downloaded=False,
                     downloading=is_downloading,
                     size_mb=None,

@@ -13,6 +13,30 @@ export const $ModelStatus = {
       type: 'string',
       isRequired: true,
     },
+    engine: {
+      type: 'string',
+      isRequired: true,
+    },
+    hf_repo_id: {
+      type: 'any-of',
+      contains: [
+        {
+          type: 'string',
+        },
+        {
+          type: 'null',
+        },
+      ],
+    },
+    model_size: {
+      type: 'string',
+    },
+    languages: {
+      type: 'array',
+      contains: {
+        type: 'string',
+      },
+    },
     downloaded: {
       type: 'boolean',
       isRequired: true,
