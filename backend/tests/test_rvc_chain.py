@@ -697,7 +697,9 @@ def test_chain_with_cloned_profile_base(data_env, monkeypatch):
     monkeypatch.setattr(backends_pkg, "load_engine_model", _fake_load_engine_model)
     monkeypatch.setattr(backends_pkg, "get_tts_backend_for_engine", lambda e: fake_base)
     # Keep base model-size resolution hermetic (no real backend config lookups).
-    monkeypatch.setattr(gen_mod, "_resolve_base_model_size", lambda e: "default")
+    monkeypatch.setattr(
+        gen_mod, "_resolve_base_model_size", lambda e, language=None: "default"
+    )
 
     cvp_calls: list[dict] = []
 
