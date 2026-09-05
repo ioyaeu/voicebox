@@ -16,12 +16,14 @@ def test_mlx_qwen_enables_runaway_retry_without_aggressive_trim():
     with patch("backend.backends.get_backend_type", return_value="mlx"):
         assert engine_needs_trim("qwen") is False
         assert engine_retries_runaway("qwen") is True
+        assert engine_retries_runaway("chatterbox") is True
 
 
 def test_pytorch_qwen_keeps_runaway_retry_disabled():
     with patch("backend.backends.get_backend_type", return_value="pytorch"):
         assert engine_needs_trim("qwen") is False
         assert engine_retries_runaway("qwen") is False
+        assert engine_retries_runaway("chatterbox") is False
 
 
 def test_detector_flags_long_internal_silence():
