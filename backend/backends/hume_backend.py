@@ -57,6 +57,7 @@ class HumeTadaBackend:
     """HumeAI TADA TTS backend for high-quality voice cloning."""
 
     _load_lock: ClassVar[threading.Lock] = threading.Lock()
+    max_chunk_chars = 500
 
     def __init__(self):
         self.model = None

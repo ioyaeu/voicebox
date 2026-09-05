@@ -14,6 +14,18 @@ class _SeedRecordingBackend:
         return np.ones(16, dtype=np.float32), 24_000
 
 
+class _MaxChunkRecordingBackend(_SeedRecordingBackend):
+    max_chunk_chars = 20
+
+    def __init__(self):
+        super().__init__()
+        self.texts: list[str] = []
+
+    async def generate(self, text, voice_prompt, language="en", seed=None, instruct=None):
+        self.texts.append(text)
+        return await super().generate(text, voice_prompt, language, seed, instruct)
+
+
 @pytest.mark.asyncio
 async def test_generate_chunked_offsets_seed_by_default():
     backend = _SeedRecordingBackend()
@@ -44,3 +56,18 @@ async def test_generate_chunked_can_preserve_seed_for_voice_consistency():
     )
 
     assert backend.seeds == [42, 42, 42]
+
+
+@pytest.mark.asyncio
+async def test_generate_chunked_honors_backend_max_chunk_chars():
+    backend = _MaxChunkRecordingBackend()
+
+    await generate_chunked(
+        backend,
+        "First sentence. Second sentence. Third sentence.",
+        {},
+        max_chunk_chars=100,
+        crossfade_ms=0,
+    )
+
+    assert backend.texts == ["First sentence.", "Second sentence.", "Third sentence."]
