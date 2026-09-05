@@ -510,7 +510,10 @@ class ModelStatus(BaseModel):
 
     model_name: str
     display_name: str
+    engine: str
     hf_repo_id: Optional[str] = None  # HuggingFace repository ID
+    model_size: str = "default"
+    languages: List[str] = Field(default_factory=list)
     downloaded: bool
     downloading: bool = False  # True if download is in progress
     size_mb: Optional[float] = None

@@ -4,7 +4,7 @@ import { useForm } from 'react-hook-form';
 import * as z from 'zod';
 import { useToast } from '@/components/ui/use-toast';
 import { apiClient } from '@/lib/api/client';
-import type { EffectConfig } from '@/lib/api/types';
+import type { EffectConfig, ModelStatus } from '@/lib/api/types';
 import { LANGUAGE_CODES, type LanguageCode } from '@/lib/constants/languages';
 import { useGeneration } from '@/lib/hooks/useGeneration';
 import { useModelDownloadToast } from '@/lib/hooks/useModelDownloadToast';
@@ -60,6 +60,20 @@ function resolveRvcBaseModel(
     };
   }
   return null;
+}
+
+function findModelForEngine(
+  models: ModelStatus[],
+  engine: string,
+  modelSize: GenerationFormValues['modelSize'],
+): ModelStatus | undefined {
+  return models.find((model) => {
+    if (model.engine !== engine) return false;
+    if (engine === 'qwen' || engine === 'qwen_custom_voice' || engine === 'tada') {
+      return model.model_size === modelSize;
+    }
+    return true;
+  });
 }
 
 interface UseGenerationFormOptions {
@@ -125,55 +139,14 @@ export function useGenerationForm(options: UseGenerationFormOptions = {}) {
       const engine = data.engine || 'qwen';
 
       if (!isRvc) {
-        const modelName =
-          engine === 'luxtts'
-            ? 'luxtts'
-            : engine === 'chatterbox'
-              ? 'chatterbox-tts'
-              : engine === 'chatterbox_turbo'
-                ? 'chatterbox-turbo'
-                : engine === 'tada'
-                  ? data.modelSize === '3B'
-                    ? 'tada-3b-ml'
-                    : 'tada-1b'
-                  : engine === 'kokoro'
-                    ? 'kokoro'
-                    : engine === 'voxtral'
-                      ? 'voxtral-4b-tts-4bit'
-                      : engine === 'qwen_custom_voice'
-                        ? `qwen-custom-voice-${data.modelSize}`
-                        : `qwen-tts-${data.modelSize}`;
-        const displayName =
-          engine === 'luxtts'
-            ? 'LuxTTS'
-            : engine === 'chatterbox'
-              ? 'Chatterbox TTS'
-              : engine === 'chatterbox_turbo'
-                ? 'Chatterbox Turbo'
-                : engine === 'tada'
-                  ? data.modelSize === '3B'
-                    ? 'TADA 3B Multilingual'
-                    : 'TADA 1B'
-                  : engine === 'kokoro'
-                    ? 'Kokoro 82M'
-                    : engine === 'voxtral'
-                      ? 'Voxtral 4B TTS'
-                      : engine === 'qwen_custom_voice'
-                        ? data.modelSize === '1.7B'
-                          ? 'Qwen CustomVoice 1.7B'
-                          : 'Qwen CustomVoice 0.6B'
-                        : data.modelSize === '1.7B'
-                          ? 'Qwen TTS 1.7B'
-                          : 'Qwen TTS 0.6B';
-
         // Check if model needs downloading
         try {
           const modelStatus = await apiClient.getModelStatus();
-          const model = modelStatus.models.find((m) => m.model_name === modelName);
+          const model = findModelForEngine(modelStatus.models, engine, data.modelSize);
 
           if (model && !model.downloaded) {
-            setDownloadingModelName(modelName);
-            setDownloadingDisplayName(displayName);
+            setDownloadingModelName(model.model_name);
+            setDownloadingDisplayName(model.display_name);
           }
         } catch (error) {
           console.error('Failed to check model status:', error);
