@@ -76,6 +76,21 @@ function findModelForEngine(
   });
 }
 
+function resolveModelSizeForRequest(
+  engine: string,
+  modelSize: GenerationFormValues['modelSize'],
+  language: LanguageCode,
+): GenerationFormValues['modelSize'] {
+  if (engine === 'qwen' || engine === 'qwen_custom_voice') {
+    return modelSize === '0.6B' ? '0.6B' : '1.7B';
+  }
+  if (engine === 'tada') {
+    if (language !== 'en') return '3B';
+    return modelSize === '3B' ? '3B' : '1B';
+  }
+  return undefined;
+}
+
 interface UseGenerationFormOptions {
   onSuccess?: (generationId: string) => void;
   defaultValues?: Partial<GenerationFormValues>;
@@ -137,12 +152,13 @@ export function useGenerationForm(options: UseGenerationFormOptions = {}) {
       // surface the normal download dialog for it below rather than skipping it.
       const isRvc = options.isRvcProfile === true;
       const engine = data.engine || 'qwen';
+      const requestModelSize = resolveModelSizeForRequest(engine, data.modelSize, data.language);
 
       if (!isRvc) {
         // Check if model needs downloading
         try {
           const modelStatus = await apiClient.getModelStatus();
-          const model = findModelForEngine(modelStatus.models, engine, data.modelSize);
+          const model = findModelForEngine(modelStatus.models, engine, requestModelSize);
 
           if (model && !model.downloaded) {
             setDownloadingModelName(model.model_name);
@@ -183,7 +199,7 @@ export function useGenerationForm(options: UseGenerationFormOptions = {}) {
         text: data.text,
         language: data.language,
         seed: data.seed,
-        model_size: isRvc ? undefined : hasModelSizes ? data.modelSize : undefined,
+        model_size: isRvc ? undefined : hasModelSizes ? requestModelSize : undefined,
         // null defers the engine choice to the profile (rvc TTS→RVC chain).
         engine: isRvc ? null : engine,
         instruct: isRvc ? undefined : supportsInstruct ? data.instruct || undefined : undefined,
@@ -202,7 +218,7 @@ export function useGenerationForm(options: UseGenerationFormOptions = {}) {
         text: '',
         language: data.language,
         seed: undefined,
-        modelSize: data.modelSize,
+        modelSize: requestModelSize,
         instruct: '',
         engine: data.engine,
         personality: data.personality,

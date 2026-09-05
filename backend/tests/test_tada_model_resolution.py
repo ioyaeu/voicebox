@@ -61,6 +61,36 @@ def test_tada_download_loader_uses_config_model_size(monkeypatch):
     assert calls == ["3B"]
 
 
+def test_tada_resolves_multilingual_model_for_non_english_language(monkeypatch):
+    monkeypatch.setattr(backends, "get_backend_type", lambda: "mlx")
+
+    assert backends.resolve_model_size_for_engine("tada", language="fr") == "3B"
+
+
+def test_tada_ignores_stale_qwen_model_size_for_non_english_language(monkeypatch):
+    monkeypatch.setattr(backends, "get_backend_type", lambda: "mlx")
+
+    assert backends.resolve_model_size_for_engine("tada", "1.7B", "fr") == "3B"
+
+
+def test_tada_switches_from_english_only_size_when_language_requires_multilingual(monkeypatch):
+    monkeypatch.setattr(backends, "get_backend_type", lambda: "mlx")
+
+    assert backends.resolve_model_size_for_engine("tada", "1B", "fr") == "3B"
+
+
+def test_tada_keeps_requested_multilingual_model_for_english(monkeypatch):
+    monkeypatch.setattr(backends, "get_backend_type", lambda: "mlx")
+
+    assert backends.resolve_model_size_for_engine("tada", "3B", "en") == "3B"
+
+
+def test_tada_defaults_to_english_model_for_english_without_model_size(monkeypatch):
+    monkeypatch.setattr(backends, "get_backend_type", lambda: "mlx")
+
+    assert backends.resolve_model_size_for_engine("tada", language="en") == "1B"
+
+
 def test_chatterbox_config_uses_mlx_repo_on_apple_silicon(monkeypatch):
     monkeypatch.setattr(backends, "get_backend_type", lambda: "mlx")
 

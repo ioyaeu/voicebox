@@ -22,8 +22,8 @@ const ENGINE_OPTIONS = [
   { value: 'qwen_custom_voice:1.7B', label: 'Qwen CustomVoice 1.7B', engine: 'qwen_custom_voice' },
   { value: 'qwen_custom_voice:0.6B', label: 'Qwen CustomVoice 0.6B', engine: 'qwen_custom_voice' },
   { value: 'luxtts', label: 'LuxTTS', engine: 'luxtts' },
-  { value: 'chatterbox', label: 'Chatterbox', engine: 'chatterbox' },
-  { value: 'chatterbox_turbo', label: 'Chatterbox Turbo', engine: 'chatterbox_turbo' },
+  { value: 'chatterbox', label: 'Chatterbox Multilingual', engine: 'chatterbox' },
+  { value: 'chatterbox_turbo', label: 'Chatterbox Turbo (English)', engine: 'chatterbox_turbo' },
   { value: 'tada:1B', label: 'TADA 1B', engine: 'tada' },
   { value: 'tada:3B', label: 'TADA 3B Multilingual', engine: 'tada' },
   { value: 'kokoro', label: 'Kokoro 82M', engine: 'kokoro' },
@@ -47,15 +47,34 @@ const ENGLISH_ONLY_ENGINES = new Set(['luxtts', 'chatterbox_turbo']);
 /** Engines that support cloned (reference audio) profiles. */
 const CLONING_ENGINES = new Set(['qwen', 'luxtts', 'chatterbox', 'chatterbox_turbo', 'tada']);
 
+type ModelSize = NonNullable<GenerationFormValues['modelSize']>;
+
 function getAvailableOptions(selectedProfile?: VoiceProfileResponse | null) {
   if (!selectedProfile) return ENGINE_OPTIONS;
   return ENGINE_OPTIONS.filter((opt) => isProfileCompatibleWithEngine(selectedProfile, opt.engine));
 }
 
-function getSelectValue(engine: string, modelSize?: string): string {
-  if (engine === 'qwen') return `qwen:${modelSize || '1.7B'}`;
-  if (engine === 'qwen_custom_voice') return `qwen_custom_voice:${modelSize || '1.7B'}`;
-  if (engine === 'tada') return `tada:${modelSize || '1B'}`;
+export function resolveModelSizeForEngine(
+  engine: string,
+  modelSize?: string,
+  language?: string,
+): ModelSize | undefined {
+  if (engine === 'qwen' || engine === 'qwen_custom_voice') {
+    return modelSize === '0.6B' ? '0.6B' : '1.7B';
+  }
+  if (engine === 'tada') {
+    if (language && language !== 'en') return '3B';
+    if (modelSize === '1B' || modelSize === '3B') return modelSize;
+    return '1B';
+  }
+  return undefined;
+}
+
+function getSelectValue(engine: string, modelSize?: string, language?: string): string {
+  const resolvedModelSize = resolveModelSizeForEngine(engine, modelSize, language);
+  if (engine === 'qwen') return `qwen:${resolvedModelSize || '1.7B'}`;
+  if (engine === 'qwen_custom_voice') return `qwen_custom_voice:${resolvedModelSize || '1.7B'}`;
+  if (engine === 'tada') return `tada:${resolvedModelSize || '1B'}`;
   return engine;
 }
 
@@ -95,7 +114,7 @@ export function applyEngineSelection(form: UseFormReturn<GenerationFormValues>, 
     }
   } else {
     form.setValue('engine', value as GenerationFormValues['engine']);
-    form.setValue('modelSize', undefined as unknown as '1.7B' | '0.6B');
+    form.setValue('modelSize', undefined);
     if (ENGLISH_ONLY_ENGINES.has(value)) {
       form.setValue('language', 'en');
     } else {
@@ -118,16 +137,25 @@ interface EngineModelSelectorProps {
 export function EngineModelSelector({ form, compact, selectedProfile }: EngineModelSelectorProps) {
   const engine = form.watch('engine') || 'qwen';
   const modelSize = form.watch('modelSize');
-  const selectValue = getSelectValue(engine, modelSize);
+  const language = form.watch('language');
+  const resolvedModelSize = resolveModelSizeForEngine(engine, modelSize, language);
+  const selectValue = getSelectValue(engine, modelSize, language);
   const availableOptions = getAvailableOptions(selectedProfile);
 
   const currentEngineAvailable = availableOptions.some((opt) => opt.value === selectValue);
 
   useEffect(() => {
-    if (!currentEngineAvailable && availableOptions.length > 0) {
-      applyEngineSelection(form, availableOptions[0].value);
+    if (resolvedModelSize !== modelSize) {
+      form.setValue('modelSize', resolvedModelSize);
     }
-  }, [availableOptions, currentEngineAvailable, form]);
+  }, [form, modelSize, resolvedModelSize]);
+
+  useEffect(() => {
+    if (!currentEngineAvailable && availableOptions.length > 0) {
+      const sameEngineOption = availableOptions.find((opt) => opt.engine === engine);
+      applyEngineSelection(form, sameEngineOption?.value ?? availableOptions[0].value);
+    }
+  }, [availableOptions, currentEngineAvailable, engine, form]);
 
   const itemClass = compact ? 'text-xs text-muted-foreground' : undefined;
   const triggerClass = compact

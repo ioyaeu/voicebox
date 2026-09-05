@@ -74,9 +74,12 @@ export const ENGINE_LANGUAGES: Record<string, readonly LanguageCode[]> = {
   qwen_custom_voice: ['zh', 'en', 'ja', 'ko', 'de', 'fr', 'ru', 'pt', 'es', 'it'],
 } as const;
 
-/** Helper: get language options for a given engine. */
-export function getLanguageOptionsForEngine(engine: string) {
-  const codes = ENGINE_LANGUAGES[engine] ?? ENGINE_LANGUAGES.qwen;
+/** Helper: get language options for a given engine/model variant. */
+export function getLanguageOptionsForEngine(engine: string, modelSize?: string) {
+  const codes =
+    engine === 'tada' && modelSize === '1B'
+      ? (['en'] as const)
+      : (ENGINE_LANGUAGES[engine] ?? ENGINE_LANGUAGES.qwen);
   return codes.map((code) => ({
     value: code,
     label: ALL_LANGUAGES[code],
