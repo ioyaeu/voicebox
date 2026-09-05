@@ -656,6 +656,7 @@ def unload_model_by_config(config: ModelConfig) -> bool:
     """Unload a model given its config. Returns True if it was loaded, False otherwise."""
     from . import get_tts_backend_for_engine
     from ..services import tts, transcribe, llm as llm_service
+    from ..utils.cache import clear_voice_prompt_memory_cache
 
     if config.engine == "whisper":
         whisper_model = transcribe.get_whisper_model()
@@ -685,6 +686,7 @@ def unload_model_by_config(config: ModelConfig) -> bool:
         loaded_size = getattr(backend, "_current_model_size", None) or getattr(backend, "model_size", None)
         if backend.is_loaded() and loaded_size == config.model_size:
             backend.unload_model()
+            clear_voice_prompt_memory_cache()
             return True
         return False
 
@@ -693,6 +695,7 @@ def unload_model_by_config(config: ModelConfig) -> bool:
         loaded_size = getattr(backend, "_current_model_size", None) or getattr(backend, "model_size", None)
         if backend.is_loaded() and loaded_size == config.model_size:
             backend.unload_model()
+            clear_voice_prompt_memory_cache()
             return True
         return False
 
@@ -700,6 +703,7 @@ def unload_model_by_config(config: ModelConfig) -> bool:
     backend = get_tts_backend_for_engine(config.engine)
     if backend.is_loaded():
         backend.unload_model()
+        clear_voice_prompt_memory_cache()
         return True
     return False
 
