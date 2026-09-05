@@ -401,7 +401,7 @@ def test_non_rvc_generation_does_not_invoke_chain(data_env, monkeypatch, voice_t
     async def _fake_load_engine_model(engine, model_size="default"):
         pass
 
-    async def _fake_create_voice_prompt(profile_id, db, use_cache=True, engine="qwen"):
+    async def _fake_create_voice_prompt(profile_id, db, use_cache=True, engine="qwen", language=None):
         return {"voice_type": voice_type}
 
     gen_chunked_calls: list[dict] = []
@@ -701,7 +701,7 @@ def test_chain_with_cloned_profile_base(data_env, monkeypatch):
 
     cvp_calls: list[dict] = []
 
-    async def _fake_create_voice_prompt(profile_id, db, use_cache=True, engine="qwen"):
+    async def _fake_create_voice_prompt(profile_id, db, use_cache=True, engine="qwen", language=None):
         cvp_calls.append({"profile_id": profile_id, "engine": engine})
         return {"voice_type": "cloned", "engine": engine}
 

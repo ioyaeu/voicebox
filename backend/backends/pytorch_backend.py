@@ -148,6 +148,7 @@ class PyTorchTTSBackend:
         audio_path: str,
         reference_text: str,
         use_cache: bool = True,
+        language: str | None = None,
     ) -> Tuple[dict, bool]:
         """
         Create voice prompt from reference audio.

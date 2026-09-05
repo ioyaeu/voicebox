@@ -52,6 +52,8 @@ _TADA_CODEC_WEIGHT_FILES = [
     "encoder/model.safetensors",
 ]
 
+_TADA_ENCODER_LANGUAGES = {"ar", "ch", "de", "es", "fr", "it", "ja", "pl", "pt"}
+
 
 class HumeTadaBackend:
     """HumeAI TADA TTS backend for high-quality voice cloning."""
@@ -62,6 +64,7 @@ class HumeTadaBackend:
     def __init__(self):
         self.model = None
         self.encoder = None
+        self._encoder_language: str | None = None
         self.model_size = "1B"  # default to 1B
         self._device = None
         self._model_load_lock = asyncio.Lock()
@@ -171,12 +174,8 @@ class HumeTadaBackend:
 
             AlignerConfig.tokenizer_name = tokenizer_path
 
-            # Load encoder (only needed for voice prompt encoding)
-            from tada.modules.encoder import Encoder
-
-            logger.info("Loading TADA encoder...")
-            self.encoder = Encoder.from_pretrained(TADA_CODEC_REPO, subfolder="encoder").to(device)
-            self.encoder.eval()
+            # Load encoder (only needed for voice prompt encoding).
+            self._load_encoder_sync(None)
 
             # Load the causal LM (includes decoder for wav generation).
             # TadaForCausalLM.from_pretrained() calls
@@ -193,6 +192,30 @@ class HumeTadaBackend:
 
         logger.info(f"HumeAI TADA {model_size} loaded successfully on {device}")
 
+    def _normalize_encoder_language(self, language: str | None) -> str | None:
+        lang = (language or "en").lower()
+        if lang == "zh":
+            lang = "ch"
+        return lang if lang in _TADA_ENCODER_LANGUAGES else None
+
+    def _load_encoder_sync(self, language: str | None) -> None:
+        """Load TADA's prompt encoder with the requested language aligner."""
+        if self.encoder is not None and self._encoder_language == language:
+            return
+
+        from tada.modules.encoder import Encoder
+
+        device = self._device or self._get_device()
+        label = language or "en"
+        logger.info(f"Loading TADA encoder aligner ({label})...")
+        self.encoder = Encoder.from_pretrained(
+            TADA_CODEC_REPO,
+            subfolder="encoder",
+            language=language,
+        ).to(device)
+        self.encoder.eval()
+        self._encoder_language = language
+
     def unload_model(self) -> None:
         """Unload model and encoder to free memory."""
         if self.model is not None:
@@ -201,6 +224,7 @@ class HumeTadaBackend:
         if self.encoder is not None:
             del self.encoder
             self.encoder = None
+            self._encoder_language = None
 
         device = self._device
         self._device = None
@@ -215,6 +239,7 @@ class HumeTadaBackend:
         audio_path: str,
         reference_text: str,
         use_cache: bool = True,
+        language: str | None = None,
     ) -> Tuple[dict, bool]:
         """
         Create voice prompt from reference audio using TADA's encoder.
@@ -226,8 +251,12 @@ class HumeTadaBackend:
         We serialize the EncoderOutput to a dict for caching.
         """
         await self.load_model(self.model_size)
+        encoder_language = self._normalize_encoder_language(language)
+        if self._encoder_language != encoder_language:
+            await asyncio.to_thread(self._load_encoder_sync, encoder_language)
 
-        cache_key = ("tada_" + get_cache_key(audio_path, reference_text)) if use_cache else None
+        cache_text = f"language={encoder_language or 'en'}\n{reference_text}"
+        cache_key = ("tada_" + get_cache_key(audio_path, cache_text)) if use_cache else None
 
         if cache_key:
             cached = get_cached_voice_prompt(cache_key)
@@ -249,7 +278,7 @@ class HumeTadaBackend:
                 audio = audio.T  # (samples, channels) -> (channels, samples)
             audio = audio.to(device)
 
-            # Encode with forced alignment.
+            # Encode with forced alignment using the language-specific aligner.
             # Must run under inference_mode: encoder params still require
             # grad by default, and an autograd graph across the DAC/Snake
             # stack can balloon VRAM far past the model footprint (#890).
@@ -331,13 +360,6 @@ class HumeTadaBackend:
                     restored[k] = v
 
             prompt = EncoderOutput(**restored)
-
-            # For non-English with the 3B-ML model, we could reload the
-            # encoder with the language-specific aligner. However, the
-            # generation itself is language-agnostic — only the encoder's
-            # aligner changes. Since we encode at create_voice_prompt time,
-            # the language is already baked in. For simplicity, we don't
-            # reload the encoder here.
 
             logger.info(f"[TADA] Generating ({language}), text length: {len(text)}")
 

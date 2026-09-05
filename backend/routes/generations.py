@@ -387,6 +387,7 @@ async def stream_speech(
         data.profile_id,
         db,
         engine=engine,
+        language=data.language,
     )
 
     from ..utils.chunked_tts import generate_chunked
