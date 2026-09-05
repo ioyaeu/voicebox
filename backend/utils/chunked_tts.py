@@ -250,6 +250,7 @@ async def generate_chunked(
     -------
     (audio, sample_rate) : Tuple[np.ndarray, int]
     """
+
     async def generate_one(
         chunk_text: str,
         chunk_seed: int | None,
@@ -265,9 +266,7 @@ async def generate_chunked(
 
         if runaway_detector is not None and runaway_detector(chunk_audio, chunk_sr):
             if retry_depth >= MAX_RUNAWAY_RETRIES or len(chunk_text) <= MIN_RUNAWAY_RETRY_CHARS:
-                raise RuntimeError(
-                    "TTS output remained unstable after retrying smaller text chunks"
-                )
+                raise RuntimeError("TTS output remained unstable after retrying smaller text chunks")
 
             retry_max_chars = max(MIN_RUNAWAY_RETRY_CHARS, len(chunk_text) // 2)
             retry_chunks = split_text_into_chunks(chunk_text, retry_max_chars)
@@ -281,11 +280,7 @@ async def generate_chunked(
             )
             retry_audio: list[np.ndarray] = []
             for i, retry_text in enumerate(retry_chunks):
-                retry_seed = (
-                    chunk_seed + ((retry_depth + 1) * 1000) + i
-                    if chunk_seed is not None
-                    else None
-                )
+                retry_seed = chunk_seed + ((retry_depth + 1) * 1000) + i if chunk_seed is not None else None
                 audio, sample_rate = await generate_one(
                     retry_text,
                     retry_seed,
@@ -305,6 +300,10 @@ async def generate_chunked(
         if trim_fn is not None:
             chunk_audio = trim_fn(chunk_audio, chunk_sr)
         return np.asarray(chunk_audio, dtype=np.float32), chunk_sr
+
+    backend_max_chunk_chars = getattr(backend, "max_chunk_chars", None)
+    if backend_max_chunk_chars is not None:
+        max_chunk_chars = min(max_chunk_chars, int(backend_max_chunk_chars))
 
     chunks = split_text_into_chunks(text, max_chunk_chars)
 
