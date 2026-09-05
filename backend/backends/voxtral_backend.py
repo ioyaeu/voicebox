@@ -7,10 +7,10 @@ rather than Voicebox-style zero-shot voice cloning.
 """
 
 import logging
-from typing import Optional
 
 import numpy as np
 
+from ..utils.platform_detect import get_backend_type
 from .base import (
     combine_voice_prompts as _combine_voice_prompts,
     is_model_cached,
@@ -21,7 +21,6 @@ from .mlx_backend import (
     _run_on_mlx_thread_blocking,
     ensure_realtime_stream_not_active,
 )
-from ..utils.platform_detect import get_backend_type
 
 logger = logging.getLogger(__name__)
 
@@ -78,11 +77,14 @@ class VoxtralTTSBackend:
             weight_extensions=(".safetensors", ".bin", ".npz"),
         )
 
-    async def load_model(self, model_size: str = "default") -> None:
+    def _ensure_loaded_sync(self) -> None:
         if self.model is not None:
             return
+        self._load_model_sync()
+
+    async def load_model(self, model_size: str = "default") -> None:
         ensure_realtime_stream_not_active("Voxtral model loading")
-        await _run_on_mlx_thread(self._load_model_sync)
+        await _run_on_mlx_thread(self._ensure_loaded_sync)
 
     def _load_model_sync(self) -> None:
         if get_backend_type() != "mlx":
@@ -150,10 +152,9 @@ class VoxtralTTSBackend:
         text: str,
         voice_prompt: dict,
         language: str = "en",
-        seed: Optional[int] = None,
-        instruct: Optional[str] = None,
+        seed: int | None = None,
+        instruct: str | None = None,
     ) -> tuple[np.ndarray, int]:
-        await self.load_model()
         ensure_realtime_stream_not_active("Voxtral generation")
 
         voice_name = voice_prompt.get("preset_voice_id") or VOXTRAL_DEFAULT_VOICE
@@ -161,6 +162,8 @@ class VoxtralTTSBackend:
             raise ValueError(f"Unknown Voxtral voice: {voice_name}")
 
         def _generate_sync() -> tuple[np.ndarray, int]:
+            self._ensure_loaded_sync()
+
             if seed is not None:
                 import mlx.core as mx
 
