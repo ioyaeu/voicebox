@@ -298,6 +298,44 @@ def _get_qwen_custom_voice_configs() -> list[ModelConfig]:
     ]
 
 
+def _get_tada_model_configs() -> list[ModelConfig]:
+    """Return TADA model configs with backend-aware HF repo IDs."""
+    backend_type = get_backend_type()
+    if backend_type == "mlx":
+        repo_1b = "HumeAI/mlx-tada-1b"
+        repo_3b = "HumeAI/mlx-tada-3b"
+        display_suffix = " (MLX 4-bit)"
+        size_1b = 4300
+        size_3b = 8900
+    else:
+        repo_1b = "HumeAI/tada-1b"
+        repo_3b = "HumeAI/tada-3b-ml"
+        display_suffix = ""
+        size_1b = 4000
+        size_3b = 8000
+
+    return [
+        ModelConfig(
+            model_name="tada-1b",
+            display_name=f"TADA 1B (English){display_suffix}",
+            engine="tada",
+            hf_repo_id=repo_1b,
+            model_size="1B",
+            size_mb=size_1b,
+            languages=["en"],
+        ),
+        ModelConfig(
+            model_name="tada-3b-ml",
+            display_name=f"TADA 3B Multilingual{display_suffix}",
+            engine="tada",
+            hf_repo_id=repo_3b,
+            model_size="3B",
+            size_mb=size_3b,
+            languages=["en", "ar", "zh", "de", "es", "fr", "it", "ja", "pl", "pt"],
+        ),
+    ]
+
+
 def _get_non_qwen_tts_configs() -> list[ModelConfig]:
     """Return model configs for non-Qwen TTS engines.
 
@@ -353,24 +391,6 @@ def _get_non_qwen_tts_configs() -> list[ModelConfig]:
             size_mb=1500,
             needs_trim=True,
             languages=["en"],
-        ),
-        ModelConfig(
-            model_name="tada-1b",
-            display_name="TADA 1B (English)",
-            engine="tada",
-            hf_repo_id="HumeAI/tada-1b",
-            model_size="1B",
-            size_mb=4000,
-            languages=["en"],
-        ),
-        ModelConfig(
-            model_name="tada-3b-ml",
-            display_name="TADA 3B Multilingual",
-            engine="tada",
-            hf_repo_id="HumeAI/tada-3b-ml",
-            model_size="3B",
-            size_mb=8000,
-            languages=["en", "ar", "zh", "de", "es", "fr", "it", "ja", "pl", "pt"],
         ),
         ModelConfig(
             model_name="kokoro",
@@ -529,6 +549,7 @@ def get_all_model_configs() -> list[ModelConfig]:
     return (
         _get_qwen_model_configs()
         + _get_qwen_custom_voice_configs()
+        + _get_tada_model_configs()
         + _get_non_qwen_tts_configs()
         + _get_whisper_configs()
         + _get_qwen_llm_configs()
@@ -538,7 +559,12 @@ def get_all_model_configs() -> list[ModelConfig]:
 
 def get_tts_model_configs() -> list[ModelConfig]:
     """Return only TTS model configs."""
-    return _get_qwen_model_configs() + _get_qwen_custom_voice_configs() + _get_non_qwen_tts_configs()
+    return (
+        _get_qwen_model_configs()
+        + _get_qwen_custom_voice_configs()
+        + _get_tada_model_configs()
+        + _get_non_qwen_tts_configs()
+    )
 
 
 def get_llm_model_configs() -> list[ModelConfig]:
@@ -657,6 +683,14 @@ def unload_model_by_config(config: ModelConfig) -> bool:
             return True
         return False
 
+    if config.engine == "tada":
+        backend = get_tts_backend_for_engine(config.engine)
+        loaded_size = getattr(backend, "_current_model_size", None) or getattr(backend, "model_size", None)
+        if backend.is_loaded() and loaded_size == config.model_size:
+            backend.unload_model()
+            return True
+        return False
+
     # All other TTS engines
     backend = get_tts_backend_for_engine(config.engine)
     if backend.is_loaded():
@@ -690,6 +724,11 @@ def check_model_loaded(config: ModelConfig) -> bool:
             loaded_size = getattr(backend, "_current_model_size", None) or getattr(backend, "model_size", None)
             return backend.is_loaded() and loaded_size == config.model_size
 
+        if config.engine == "tada":
+            backend = get_tts_backend_for_engine(config.engine)
+            loaded_size = getattr(backend, "_current_model_size", None) or getattr(backend, "model_size", None)
+            return backend.is_loaded() and loaded_size == config.model_size
+
         backend = get_tts_backend_for_engine(config.engine)
         return backend.is_loaded()
     except Exception:
@@ -708,6 +747,9 @@ def get_model_load_func(config: ModelConfig):
         return lambda: tts.get_tts_model().load_model(config.model_size)
 
     if config.engine == "qwen_custom_voice":
+        return lambda: get_tts_backend_for_engine(config.engine).load_model(config.model_size)
+
+    if config.engine == "tada":
         return lambda: get_tts_backend_for_engine(config.engine).load_model(config.model_size)
 
     if config.engine == "qwen_llm":
@@ -795,9 +837,15 @@ def get_tts_backend_for_engine(engine: str) -> TTSBackend:
 
             backend = ChatterboxTurboTTSBackend()
         elif engine == "tada":
-            from .hume_backend import HumeTadaBackend
+            backend_type = get_backend_type()
+            if backend_type == "mlx":
+                from .mlx_tada_backend import MLXTadaBackend
 
-            backend = HumeTadaBackend()
+                backend = MLXTadaBackend()
+            else:
+                from .hume_backend import HumeTadaBackend
+
+                backend = HumeTadaBackend()
         elif engine == "kokoro":
             from .kokoro_backend import KokoroTTSBackend
 
