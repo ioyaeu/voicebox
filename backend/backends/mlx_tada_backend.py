@@ -64,14 +64,17 @@ class MLXTadaBackend:
             required_files=_MLX_TADA_WEIGHT_FILES,
         ) and is_model_cached(MLX_TADA_TOKENIZER_REPO, required_files=_TOKENIZER_FILES)
 
-    async def load_model(self, model_size: str = "1B") -> None:
+    def _ensure_loaded_sync(self, model_size: str = "1B") -> None:
         if self.model is not None and self._current_model_size == model_size:
             return
         if self.model is not None:
-            self.unload_model()
+            self._unload_model_sync()
 
+        self._load_model_sync(model_size)
+
+    async def load_model(self, model_size: str = "1B") -> None:
         ensure_realtime_stream_not_active("MLX TADA model loading")
-        await _run_on_mlx_thread(self._load_model_sync, model_size)
+        await _run_on_mlx_thread(self._ensure_loaded_sync, model_size)
 
     def _load_model_sync(self, model_size: str = "1B") -> None:
         model_name = "tada-3b-ml" if model_size == "3B" else "tada-1b"
@@ -141,8 +144,6 @@ class MLXTadaBackend:
         use_cache: bool = True,
         language: str | None = None,
     ) -> tuple[dict, bool]:
-        await self.load_model(self.model_size)
-
         cache_key = "mlx_tada_" + get_cache_key(
             audio_path,
             f"language={language or 'en'}\n{reference_text}",
@@ -158,6 +159,7 @@ class MLXTadaBackend:
             return voice_prompt, True
 
         def _encode_sync() -> None:
+            self._ensure_loaded_sync(self.model_size)
             reference_path.parent.mkdir(parents=True, exist_ok=True)
             reference = self.model.load_reference(str(audio_path), reference_text)
             reference.save(str(reference_path))
@@ -180,10 +182,11 @@ class MLXTadaBackend:
         seed: int | None = None,
         instruct: str | None = None,
     ) -> tuple[np.ndarray, int]:
-        await self.load_model(self.model_size)
         ensure_realtime_stream_not_active("MLX TADA generation")
 
         def _generate_sync() -> tuple[np.ndarray, int]:
+            self._ensure_loaded_sync(self.model_size)
+
             if seed is not None:
                 import mlx.core as mx
 
