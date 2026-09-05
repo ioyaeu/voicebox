@@ -66,3 +66,50 @@ async def test_create_voice_prompt_runs_encoder_under_inference_mode(tmp_path, m
     assert encoder.called_under_inference_mode is True
     assert isinstance(prompt["emb"], torch.Tensor)
     assert prompt["emb"].device.type == "cpu"
+
+
+@pytest.mark.asyncio
+async def test_create_voice_prompt_uses_language_specific_encoder(tmp_path, monkeypatch):
+    wav = tmp_path / "ref.wav"
+    sf.write(str(wav), np.zeros(24000, dtype=np.float32), 24000)
+
+    backend = HumeTadaBackend()
+    backend.model = object()
+    backend.model_size = "3B"
+    backend._device = "cpu"
+    backend.encoder = _GradTrackingEncoder()
+
+    loaded_languages = []
+    cache_inputs = []
+
+    def _fake_load_encoder(language):
+        loaded_languages.append(language)
+        backend.encoder = _GradTrackingEncoder()
+        backend._encoder_language = language
+
+    monkeypatch.setattr(backend, "load_model", AsyncMock(return_value=None))
+    monkeypatch.setattr(backend, "_load_encoder_sync", _fake_load_encoder)
+    monkeypatch.setattr(
+        "backend.backends.hume_backend.get_cache_key",
+        lambda audio_path, reference_text: cache_inputs.append(reference_text) or "cache-key",
+    )
+    monkeypatch.setattr(
+        "backend.backends.hume_backend.get_cached_voice_prompt",
+        lambda key: None,
+    )
+    monkeypatch.setattr(
+        "backend.backends.hume_backend.cache_voice_prompt",
+        lambda key, value: None,
+    )
+
+    prompt, from_cache = await backend.create_voice_prompt(
+        str(wav),
+        reference_text="bonjour le monde",
+        use_cache=True,
+        language="fr",
+    )
+
+    assert from_cache is False
+    assert loaded_languages == ["fr"]
+    assert cache_inputs == ["language=fr\nbonjour le monde"]
+    assert isinstance(prompt["emb"], torch.Tensor)

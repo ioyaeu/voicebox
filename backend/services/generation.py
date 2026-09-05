@@ -110,6 +110,7 @@ async def run_generation(
                 bg_db,
                 use_cache=True,
                 engine=engine,
+                language=language,
             )
 
             await history.update_generation_status(generation_id, "generating", bg_db)
@@ -380,6 +381,7 @@ async def _generate_rvc_chained(
                     bg_db,
                     use_cache=True,
                     engine=base_engine,
+                    language=language,
                 )
             else:
                 voice_prompt = {
@@ -654,6 +656,7 @@ async def generate_audio_sync(
             bg_db,
             use_cache=True,
             engine=engine,
+            language=language,
         )
     finally:
         bg_db.close()

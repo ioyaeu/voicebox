@@ -865,6 +865,7 @@ async def create_voice_prompt_for_profile(
     db: Session,
     use_cache: bool = True,
     engine: str = "qwen",
+    language: str | None = None,
 ) -> dict:
     """
     Create a voice prompt from a profile.
@@ -889,6 +890,7 @@ async def create_voice_prompt_for_profile(
         raise ValueError(f"Profile not found: {profile_id}")
 
     voice_type = getattr(profile, "voice_type", None) or "cloned"
+    prompt_language = language or getattr(profile, "language", None) or "en"
     validate_profile_engine(profile, engine)
 
     # ── Preset profiles: return engine-specific voice reference ──
@@ -934,6 +936,7 @@ async def create_voice_prompt_for_profile(
             str(sample_audio_path),
             sample.reference_text,
             use_cache=use_cache,
+            language=prompt_language,
         )
         return voice_prompt
 
@@ -967,6 +970,7 @@ async def create_voice_prompt_for_profile(
         str(combined_path),
         combined_text,
         use_cache=use_cache,
+        language=prompt_language,
     )
     return voice_prompt
 
