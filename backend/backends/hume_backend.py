@@ -16,20 +16,19 @@ causal LM generates speech via flow-matching diffusion.
 import asyncio
 import logging
 import threading
-from typing import ClassVar, List, Optional, Tuple
+from typing import ClassVar
 
 import numpy as np
 
-from . import TTSBackend
+from ..utils.cache import cache_voice_prompt, get_cache_key, get_cached_voice_prompt
 from .base import (
-    is_model_cached,
-    get_torch_device,
-    empty_device_cache,
-    manual_seed,
     combine_voice_prompts as _combine_voice_prompts,
+    empty_device_cache,
+    get_torch_device,
+    is_model_cached,
+    manual_seed,
     model_load_progress,
 )
-from ..utils.cache import get_cache_key, get_cached_voice_prompt, cache_voice_prompt
 
 logger = logging.getLogger(__name__)
 
@@ -68,6 +67,7 @@ class HumeTadaBackend:
         self.model_size = "1B"  # default to 1B
         self._device = None
         self._model_load_lock = asyncio.Lock()
+        self._encoder_lock = asyncio.Lock()
 
     def _get_device(self) -> str:
         # Force CPU on macOS — MPS has issues with flow matching
@@ -178,11 +178,9 @@ class HumeTadaBackend:
             self._load_encoder_sync(None)
 
             # Load the causal LM (includes decoder for wav generation).
-            # TadaForCausalLM.from_pretrained() calls
-            #   getattr(config, "tokenizer_name", "meta-llama/Llama-3.2-1B")
-            # which hits the gated repo. Pre-load the config from HF,
-            # inject the local tokenizer path, then pass it in.
-            from tada.modules.tada import TadaForCausalLM, TadaConfig
+            # Pre-load the config from HF and inject the local tokenizer path
+            # before TADA falls back to the gated Meta Llama tokenizer.
+            from tada.modules.tada import TadaConfig, TadaForCausalLM
 
             logger.info(f"Loading TADA {model_size} model...")
             config = TadaConfig.from_pretrained(repo)
@@ -197,6 +195,11 @@ class HumeTadaBackend:
         if lang == "zh":
             lang = "ch"
         return lang if lang in _TADA_ENCODER_LANGUAGES else None
+
+    def _encoder_language_for_prompt(self, language: str | None) -> str | None:
+        if self.model_size != "3B":
+            return None
+        return self._normalize_encoder_language(language)
 
     def _load_encoder_sync(self, language: str | None) -> None:
         """Load TADA's prompt encoder with the requested language aligner."""
@@ -240,7 +243,7 @@ class HumeTadaBackend:
         reference_text: str,
         use_cache: bool = True,
         language: str | None = None,
-    ) -> Tuple[dict, bool]:
+    ) -> tuple[dict, bool]:
         """
         Create voice prompt from reference audio using TADA's encoder.
 
@@ -251,11 +254,13 @@ class HumeTadaBackend:
         We serialize the EncoderOutput to a dict for caching.
         """
         await self.load_model(self.model_size)
-        encoder_language = self._normalize_encoder_language(language)
-        if self._encoder_language != encoder_language:
-            await asyncio.to_thread(self._load_encoder_sync, encoder_language)
 
-        cache_text = f"language={encoder_language or 'en'}\n{reference_text}"
+        encoder_language = self._encoder_language_for_prompt(language)
+        cache_text = (
+            f"language={encoder_language or 'en'}\n{reference_text}"
+            if self.model_size == "3B"
+            else reference_text
+        )
         cache_key = ("tada_" + get_cache_key(audio_path, cache_text)) if use_cache else None
 
         if cache_key:
@@ -263,55 +268,62 @@ class HumeTadaBackend:
             if cached is not None and isinstance(cached, dict):
                 return cached, True
 
-        def _encode_sync():
-            import torch
-            import soundfile as sf
+        async with self._encoder_lock:
+            if cache_key:
+                cached = get_cached_voice_prompt(cache_key)
+                if cached is not None and isinstance(cached, dict):
+                    return cached, True
 
-            device = self._device
+            if self._encoder_language != encoder_language:
+                await asyncio.to_thread(self._load_encoder_sync, encoder_language)
 
-            # Load audio with soundfile (torchaudio 2.10+ requires torchcodec)
-            audio_np, sr = sf.read(str(audio_path), dtype="float32")
-            audio = torch.from_numpy(audio_np).float()
-            if audio.ndim == 1:
-                audio = audio.unsqueeze(0)  # (samples,) -> (1, samples)
-            else:
-                audio = audio.T  # (samples, channels) -> (channels, samples)
-            audio = audio.to(device)
+            encoded = await asyncio.to_thread(self._encode_prompt_sync, audio_path, reference_text)
 
-            # Encode with forced alignment using the language-specific aligner.
-            # Must run under inference_mode: encoder params still require
-            # grad by default, and an autograd graph across the DAC/Snake
-            # stack can balloon VRAM far past the model footprint (#890).
-            text_arg = [reference_text] if reference_text else None
-            with torch.inference_mode():
-                prompt = self.encoder(audio, text=text_arg, sample_rate=sr)
-
-            # Serialize EncoderOutput to a dict of CPU tensors for caching
-            prompt_dict = {}
-            for field_name in prompt.__dataclass_fields__:
-                val = getattr(prompt, field_name)
-                if isinstance(val, torch.Tensor):
-                    prompt_dict[field_name] = val.detach().cpu()
-                elif isinstance(val, list):
-                    prompt_dict[field_name] = val
-                elif isinstance(val, (int, float)):
-                    prompt_dict[field_name] = val
-                else:
-                    prompt_dict[field_name] = val
-            return prompt_dict
-
-        encoded = await asyncio.to_thread(_encode_sync)
-
-        if cache_key:
-            cache_voice_prompt(cache_key, encoded)
+            if cache_key:
+                cache_voice_prompt(cache_key, encoded)
 
         return encoded, False
 
+    def _encode_prompt_sync(self, audio_path: str, reference_text: str) -> dict:
+        import soundfile as sf
+        import torch
+
+        device = self._device
+
+        # Load audio with soundfile (torchaudio 2.10+ requires torchcodec)
+        audio_np, sr = sf.read(str(audio_path), dtype="float32")
+        audio = torch.from_numpy(audio_np).float()
+        if audio.ndim == 1:
+            audio = audio.unsqueeze(0)  # (samples,) -> (1, samples)
+        else:
+            audio = audio.T  # (samples, channels) -> (channels, samples)
+        audio = audio.to(device)
+
+        # Encode with forced alignment using the language-specific aligner.
+        # Must run under inference_mode: encoder params still require
+        # grad by default, and an autograd graph across the DAC/Snake
+        # stack can balloon VRAM far past the model footprint (#890).
+        text_arg = [reference_text] if reference_text else None
+        with torch.inference_mode():
+            prompt = self.encoder(audio, text=text_arg, sample_rate=sr)
+
+        # Serialize EncoderOutput to a dict of CPU tensors for caching
+        prompt_dict = {}
+        for field_name in prompt.__dataclass_fields__:
+            val = getattr(prompt, field_name)
+            if isinstance(val, torch.Tensor):
+                prompt_dict[field_name] = val.detach().cpu()
+            elif isinstance(val, (list, int, float)):
+                prompt_dict[field_name] = val
+            else:
+                prompt_dict[field_name] = val
+        return prompt_dict
+
     async def combine_voice_prompts(
         self,
-        audio_paths: List[str],
-        reference_texts: List[str],
-    ) -> Tuple[np.ndarray, str]:
+        audio_paths: list[str],
+        reference_texts: list[str],
+    ) -> tuple[np.ndarray, str]:
         return await _combine_voice_prompts(audio_paths, reference_texts, sample_rate=24000)
 
     async def generate(
@@ -319,9 +331,9 @@ class HumeTadaBackend:
         text: str,
         voice_prompt: dict,
         language: str = "en",
-        seed: Optional[int] = None,
-        instruct: Optional[str] = None,
-    ) -> Tuple[np.ndarray, int]:
+        seed: int | None = None,
+        instruct: str | None = None,
+    ) -> tuple[np.ndarray, int]:
         """
         Generate audio from text using HumeAI TADA.
 
