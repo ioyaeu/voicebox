@@ -21,6 +21,8 @@ logger = logging.getLogger("voicebox.chunked-tts")
 DEFAULT_MAX_CHUNK_CHARS = 800
 MAX_RUNAWAY_RETRIES = 2
 MIN_RUNAWAY_RETRY_CHARS = 100
+DEFAULT_CHUNK_LOUDNESS_MAX_GAIN_DB = 6.0
+MIN_ACTIVE_RMS = 1e-5
 
 # Common abbreviations that should NOT be treated as sentence endings.
 # Lowercase for case-insensitive matching.
@@ -199,6 +201,79 @@ def concatenate_audio_chunks(
     return result
 
 
+def _active_speech_rms(audio: np.ndarray, sample_rate: int) -> float:
+    """Estimate speech loudness while ignoring most leading/trailing silence."""
+    samples = np.asarray(audio, dtype=np.float32).reshape(-1)
+    if samples.size == 0:
+        return 0.0
+
+    frame_size = max(1, int(sample_rate * 0.05))
+    hop_size = max(1, int(sample_rate * 0.025))
+
+    if samples.size <= frame_size:
+        return float(np.sqrt(np.mean(np.square(samples, dtype=np.float64))))
+
+    frame_rms = np.array(
+        [
+            np.sqrt(np.mean(np.square(samples[start : start + frame_size], dtype=np.float64)))
+            for start in range(0, samples.size - frame_size + 1, hop_size)
+        ],
+        dtype=np.float64,
+    )
+    if frame_rms.size == 0:
+        return 0.0
+
+    threshold = max(float(np.percentile(frame_rms, 20)) * 1.5, MIN_ACTIVE_RMS)
+    active = frame_rms[frame_rms >= threshold]
+    if active.size == 0:
+        active = frame_rms
+    return float(np.median(active))
+
+
+def match_chunk_loudness(
+    chunks: list[np.ndarray],
+    sample_rate: int,
+    max_gain_db: float = DEFAULT_CHUNK_LOUDNESS_MAX_GAIN_DB,
+) -> list[np.ndarray]:
+    """Match active-speech RMS between chunks with bounded gain changes."""
+    if len(chunks) <= 1:
+        return chunks
+
+    rms_values = np.array([_active_speech_rms(chunk, sample_rate) for chunk in chunks], dtype=np.float64)
+    valid = rms_values[rms_values >= MIN_ACTIVE_RMS]
+    if valid.size <= 1:
+        return chunks
+
+    target_rms = float(np.median(valid))
+    max_gain = 10 ** (max_gain_db / 20)
+    min_gain = 1 / max_gain
+
+    matched: list[np.ndarray] = []
+    gain_db_values: list[float] = []
+    for chunk, rms in zip(chunks, rms_values, strict=True):
+        chunk = np.asarray(chunk, dtype=np.float32)
+        if rms < MIN_ACTIVE_RMS:
+            matched.append(chunk)
+            gain_db_values.append(0.0)
+            continue
+
+        gain = float(np.clip(target_rms / rms, min_gain, max_gain))
+        peak = float(np.max(np.abs(chunk))) if chunk.size else 0.0
+        if peak > 0:
+            gain = min(gain, 0.98 / peak)
+        matched.append((chunk * gain).astype(np.float32))
+        gain_db_values.append(20 * np.log10(max(gain, 1e-12)))
+
+    logger.info(
+        "Matched chunk loudness across %d chunks (target active RMS %.4f, gain range %.1f..%.1f dB)",
+        len(chunks),
+        target_rms,
+        min(gain_db_values),
+        max(gain_db_values),
+    )
+    return matched
+
+
 def _runaway_detector_flags(runaway_detector, audio: np.ndarray, sample_rate: int, text: str) -> bool:
     """Call new text-aware detectors while keeping two-argument detectors usable."""
     try:
@@ -301,6 +376,10 @@ async def generate_chunked(
                 )
                 retry_audio.append(np.asarray(audio, dtype=np.float32))
 
+            if bool(getattr(backend, "match_chunk_loudness", False)):
+                max_gain_db = float(getattr(backend, "chunk_loudness_max_gain_db", DEFAULT_CHUNK_LOUDNESS_MAX_GAIN_DB))
+                retry_audio = match_chunk_loudness(retry_audio, sample_rate, max_gain_db=max_gain_db)
+
             return (
                 concatenate_audio_chunks(
                     retry_audio,
@@ -356,6 +435,10 @@ async def generate_chunked(
         audio_chunks.append(chunk_audio)
         if sample_rate is None:
             sample_rate = chunk_sr
+
+    if bool(getattr(backend, "match_chunk_loudness", False)):
+        max_gain_db = float(getattr(backend, "chunk_loudness_max_gain_db", DEFAULT_CHUNK_LOUDNESS_MAX_GAIN_DB))
+        audio_chunks = match_chunk_loudness(audio_chunks, sample_rate, max_gain_db=max_gain_db)
 
     audio = concatenate_audio_chunks(audio_chunks, sample_rate, crossfade_ms=crossfade_ms)
     return audio, sample_rate

@@ -82,6 +82,7 @@ class MLXTTSBackend:
     """MLX-based TTS backend using mlx-audio."""
 
     max_chunk_chars = 1000
+    match_chunk_loudness = True
 
     def __init__(self, model_size: str = "1.7B"):
         self.model = None
