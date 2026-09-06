@@ -69,7 +69,7 @@ async def run_generation(
         load_engine_model,
     )
     from ..database import VoiceProfile as DBVoiceProfile
-    from ..utils.audio import has_tts_runaway, normalize_audio, save_audio, trim_tts_output
+    from ..utils.audio import detect_tts_runaway, normalize_audio, save_audio, trim_tts_output
     from ..utils.chunked_tts import generate_chunked
 
     task_manager = get_task_manager()
@@ -115,7 +115,7 @@ async def run_generation(
 
             await history.update_generation_status(generation_id, "generating", bg_db)
             trim_fn = trim_tts_output if engine_needs_trim(engine) else None
-            runaway_detector = has_tts_runaway if engine_retries_runaway(engine) else None
+            runaway_detector = detect_tts_runaway if engine_retries_runaway(engine) else None
 
             gen_kwargs: dict = dict(
                 language=language,
@@ -290,6 +290,7 @@ async def _generate_rvc_chained(
 
     from ..backends import (
         engine_needs_trim,
+        engine_retries_runaway,
         get_tts_backend_for_engine,
         load_engine_model,
     )
@@ -299,7 +300,7 @@ async def _generate_rvc_chained(
         release as rvc_release,
     )
     from ..database import VoiceProfile as DBVoiceProfile
-    from ..utils.audio import trim_tts_output
+    from ..utils.audio import detect_tts_runaway, trim_tts_output
     from ..utils.chunked_tts import generate_chunked
     from .profiles import (
         RVC_PROFILE_BASE_PREFIX,
@@ -395,12 +396,14 @@ async def _generate_rvc_chained(
 
             await history.update_generation_status(generation_id, "generating", bg_db)
             trim_fn = trim_tts_output if engine_needs_trim(base_engine) else None
+            runaway_detector = detect_tts_runaway if engine_retries_runaway(base_engine) else None
 
             gen_kwargs: dict = dict(
                 language=language,
                 seed=seed,
                 instruct=instruct,
                 trim_fn=trim_fn,
+                runaway_detector=runaway_detector,
             )
             if max_chunk_chars is not None:
                 gen_kwargs["max_chunk_chars"] = max_chunk_chars
@@ -646,7 +649,7 @@ async def generate_audio_sync(
         load_engine_model,
     )
     from ..utils.chunked_tts import generate_chunked
-    from ..utils.audio import has_tts_runaway, normalize_audio, trim_tts_output
+    from ..utils.audio import detect_tts_runaway, normalize_audio, trim_tts_output
     from . import tts
 
     bg_db = next(get_db())
@@ -665,7 +668,7 @@ async def generate_audio_sync(
         bg_db.close()
 
     trim_fn = trim_tts_output if engine_needs_trim(engine) else None
-    runaway_detector = has_tts_runaway if engine_retries_runaway(engine) else None
+    runaway_detector = detect_tts_runaway if engine_retries_runaway(engine) else None
 
     gen_kwargs: dict = dict(
         language=language,

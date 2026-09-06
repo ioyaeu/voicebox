@@ -242,10 +242,6 @@ def _get_qwen_model_configs() -> list[ModelConfig]:
         repo_1_7b = "Qwen/Qwen3-TTS-12Hz-1.7B-Base"
         repo_0_6b = "Qwen/Qwen3-TTS-12Hz-0.6B-Base"
 
-    # mlx-audio can continue after an EOS miss with silence followed by
-    # codec noise. Retry only the affected text as smaller chunks.
-    retries_runaway = backend_type == "mlx"
-
     return [
         ModelConfig(
             model_name="qwen-tts-1.7B",
@@ -254,7 +250,7 @@ def _get_qwen_model_configs() -> list[ModelConfig]:
             hf_repo_id=repo_1_7b,
             model_size="1.7B",
             size_mb=3500,
-            retries_runaway=retries_runaway,
+            retries_runaway=True,
             supports_instruct=False,  # Base model drops instruct silently
             languages=["zh", "en", "ja", "ko", "de", "fr", "ru", "pt", "es", "it"],
         ),
@@ -265,7 +261,7 @@ def _get_qwen_model_configs() -> list[ModelConfig]:
             hf_repo_id=repo_0_6b,
             model_size="0.6B",
             size_mb=1200,
-            retries_runaway=retries_runaway,
+            retries_runaway=True,
             supports_instruct=False,
             languages=["zh", "en", "ja", "ko", "de", "fr", "ru", "pt", "es", "it"],
         ),
@@ -282,6 +278,7 @@ def _get_qwen_custom_voice_configs() -> list[ModelConfig]:
             hf_repo_id="Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice",
             model_size="1.7B",
             size_mb=3500,
+            retries_runaway=True,
             supports_instruct=True,
             languages=["zh", "en", "ja", "ko", "de", "fr", "ru", "pt", "es", "it"],
         ),
@@ -292,6 +289,7 @@ def _get_qwen_custom_voice_configs() -> list[ModelConfig]:
             hf_repo_id="Qwen/Qwen3-TTS-12Hz-0.6B-CustomVoice",
             model_size="0.6B",
             size_mb=1200,
+            retries_runaway=True,
             supports_instruct=True,
             languages=["zh", "en", "ja", "ko", "de", "fr", "ru", "pt", "es", "it"],
         ),

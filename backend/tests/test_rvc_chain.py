@@ -716,7 +716,12 @@ def test_chain_with_cloned_profile_base(data_env, monkeypatch):
     async def _fake_generate_chunked(backend, text, voice_prompt, **kwargs):
         order.append("tts")
         gen_calls.append(
-            {"backend": backend, "voice_prompt": voice_prompt, "language": kwargs.get("language")}
+            {
+                "backend": backend,
+                "voice_prompt": voice_prompt,
+                "language": kwargs.get("language"),
+                "runaway_detector": kwargs.get("runaway_detector"),
+            }
         )
         return base_audio.copy(), BASE_SR
 
@@ -793,6 +798,7 @@ def test_chain_with_cloned_profile_base(data_env, monkeypatch):
     # --- language passed through to the base TTS stage. ---
     assert len(gen_calls) == 1
     assert gen_calls[0]["language"] == "ru"
+    assert gen_calls[0]["runaway_detector"] is not None
     assert gen_calls[0]["backend"] is fake_base
     assert gen_calls[0]["voice_prompt"] == {"voice_type": "cloned", "engine": "qwen"}
 

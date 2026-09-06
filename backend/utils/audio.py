@@ -2,10 +2,19 @@
 Audio processing utilities.
 """
 
+import os
+import re
+from pathlib import Path
+
+import librosa
 import numpy as np
 import soundfile as sf
-import librosa
-from typing import Tuple, Optional
+
+QWEN_MAX_NEW_TOKENS = 8192
+QWEN_MIN_NEW_TOKENS = 1500
+QWEN_TOKENS_PER_CHAR = 12
+RUNAWAY_MAX_SECONDS_PER_NON_WS_CHAR = 0.4
+RUNAWAY_MIN_PLAUSIBLE_SECONDS = 30.0
 
 
 def normalize_audio(
@@ -15,32 +24,32 @@ def normalize_audio(
 ) -> np.ndarray:
     """
     Normalize audio to target loudness with peak limiting.
-    
+
     Args:
         audio: Input audio array
         target_db: Target RMS level in dB
         peak_limit: Peak limit (0.0-1.0)
-        
+
     Returns:
         Normalized audio array
     """
     # Convert to float32
     audio = audio.astype(np.float32)
-    
+
     # Calculate current RMS
     rms = np.sqrt(np.mean(audio**2))
-    
+
     # Calculate target RMS
-    target_rms = 10**(target_db / 20)
-    
+    target_rms = 10 ** (target_db / 20)
+
     # Apply gain
     if rms > 0:
         gain = target_rms / rms
         audio = audio * gain
-    
+
     # Peak limiting
     audio = np.clip(audio, -peak_limit, peak_limit)
-    
+
     return audio
 
 
@@ -48,15 +57,15 @@ def load_audio(
     path: str,
     sample_rate: int = 24000,
     mono: bool = True,
-) -> Tuple[np.ndarray, int]:
+) -> tuple[np.ndarray, int]:
     """
     Load audio file with normalization.
-    
+
     Args:
         path: Path to audio file
         sample_rate: Target sample rate
         mono: Convert to mono
-        
+
     Returns:
         Tuple of (audio_array, sample_rate)
     """
@@ -84,9 +93,6 @@ def save_audio(
     Raises:
         OSError: If file cannot be written
     """
-    from pathlib import Path
-    import os
-
     temp_path = f"{path}.tmp"
     try:
         # Ensure parent directory exists
@@ -94,7 +100,7 @@ def save_audio(
 
         # Write to temporary file first (explicit format since .tmp
         # extension is not recognised by soundfile)
-        sf.write(temp_path, audio, sample_rate, format='WAV')
+        sf.write(temp_path, audio, sample_rate, format="WAV")
 
         # Atomic rename to final path
         os.replace(temp_path, path)
@@ -108,6 +114,52 @@ def save_audio(
             pass  # Best effort cleanup
 
         raise OSError(f"Failed to save audio to {path}: {e}") from e
+
+
+def _qwen_budget_text_length(text: str) -> int:
+    return max(len((text or "").strip()), 1)
+
+
+def estimate_max_new_tokens(
+    text: str,
+    *,
+    tokens_per_char: int = QWEN_TOKENS_PER_CHAR,
+    min_tokens: int = QWEN_MIN_NEW_TOKENS,
+    max_tokens: int = QWEN_MAX_NEW_TOKENS,
+) -> int:
+    """Return a text-scaled codec-token budget for Qwen TTS decoding."""
+    budget = _qwen_budget_text_length(text) * tokens_per_char
+    return min(max_tokens, max(min_tokens, budget))
+
+
+def exceeds_plausible_speech_duration(
+    audio: np.ndarray,
+    sample_rate: int = 24000,
+    text: str | None = None,
+    *,
+    seconds_per_non_ws_char: float = RUNAWAY_MAX_SECONDS_PER_NON_WS_CHAR,
+    min_seconds: float = RUNAWAY_MIN_PLAUSIBLE_SECONDS,
+) -> bool:
+    """Detect output that is far longer than the supplied text can explain."""
+    if text is None or sample_rate <= 0:
+        return False
+
+    non_ws_chars = max(len(re.sub(r"\s+", "", text)), 1)
+    max_duration = max(min_seconds, non_ws_chars * seconds_per_non_ws_char)
+    return (len(audio) / sample_rate) > max_duration
+
+
+def detect_tts_runaway(
+    audio: np.ndarray,
+    sample_rate: int = 24000,
+    text: str | None = None,
+) -> bool:
+    """Combine silence-shape and implausible-duration TTS runaway guards."""
+    return has_tts_runaway(audio, sample_rate) or exceeds_plausible_speech_duration(
+        audio,
+        sample_rate,
+        text,
+    )
 
 
 def has_tts_runaway(
@@ -184,12 +236,7 @@ def trim_tts_output(
     threshold_linear = 10 ** (silence_threshold_db / 20)
 
     # Compute per-frame RMS
-    rms = np.array(
-        [
-            np.sqrt(np.mean(audio[i * frame_len : (i + 1) * frame_len] ** 2))
-            for i in range(n_frames)
-        ]
-    )
+    rms = np.array([np.sqrt(np.mean(audio[i * frame_len : (i + 1) * frame_len] ** 2)) for i in range(n_frames)])
     is_speech = rms >= threshold_linear
 
     # Find first speech frame
@@ -301,7 +348,7 @@ def validate_reference_audio(
     min_duration: float = 2.0,
     max_duration: float = 30.0,
     min_rms: float = 0.01,
-) -> Tuple[bool, Optional[str]]:
+) -> tuple[bool, str | None]:
     """
     Validate reference audio for voice cloning.
 
@@ -314,9 +361,7 @@ def validate_reference_audio(
     Returns:
         Tuple of (is_valid, error_message)
     """
-    result = validate_and_load_reference_audio(
-        audio_path, min_duration, max_duration, min_rms
-    )
+    result = validate_and_load_reference_audio(audio_path, min_duration, max_duration, min_rms)
     return (result[0], result[1])
 
 
@@ -325,7 +370,7 @@ def validate_and_load_reference_audio(
     min_duration: float = 2.0,
     max_duration: float = 30.0,
     min_rms: float = 0.01,
-) -> Tuple[bool, Optional[str], Optional[np.ndarray], Optional[int]]:
+) -> tuple[bool, str | None, np.ndarray | None, int | None]:
     """
     Validate and load reference audio in a single pass.
 
@@ -352,4 +397,4 @@ def validate_and_load_reference_audio(
 
         return True, None, audio, sr
     except Exception as e:
-        return False, f"Error validating audio: {str(e)}", None, None
+        return False, f"Error validating audio: {e!s}", None, None

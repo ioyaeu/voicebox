@@ -400,9 +400,9 @@ async def stream_speech(
 
         trim_fn = trim_tts_output
     if engine_retries_runaway(engine):
-        from ..utils.audio import has_tts_runaway
+        from ..utils.audio import detect_tts_runaway
 
-        runaway_detector = has_tts_runaway
+        runaway_detector = detect_tts_runaway
 
     audio, sample_rate = await generate_chunked(
         tts_model,

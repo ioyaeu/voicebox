@@ -16,16 +16,17 @@ Languages supported: zh, en, ja, ko, de, fr, ru, pt, es, it
 
 import asyncio
 import logging
-from typing import Optional
 
 import numpy as np
 import torch
 
-from . import TTSBackend, LANGUAGE_CODE_TO_NAME
+from ..utils.audio import estimate_max_new_tokens
+from . import LANGUAGE_CODE_TO_NAME
 from .base import (
-    is_model_cached,
-    get_torch_device,
     combine_voice_prompts as _combine_voice_prompts,
+    empty_device_cache,
+    get_torch_device,
+    is_model_cached,
     model_load_progress,
 )
 
@@ -33,7 +34,7 @@ logger = logging.getLogger(__name__)
 
 # ── Preset speakers ──────────────────────────────────────────────────
 
-# (speaker_id, display_name, gender, native_language_code, description)
+# Entries are: speaker_id, display_name, gender, native language code, description.
 QWEN_CUSTOM_VOICES = [
     ("Vivian", "Vivian", "female", "zh", "Bright, slightly edgy young female voice"),
     ("Serena", "Serena", "female", "zh", "Warm, gentle young female voice"),
@@ -58,14 +59,16 @@ QWEN_CV_HF_REPOS = {
 class QwenCustomVoiceBackend:
     """Qwen3-TTS CustomVoice backend — preset speakers with instruct control."""
 
+    max_chunk_chars = 1000
+
     def __init__(self, model_size: str = "1.7B"):
         self.model = None
         self.model_size = model_size
         self.device = self._get_device()
-        self._current_model_size: Optional[str] = None
+        self._current_model_size: str | None = None
 
     def _get_device(self) -> str:
-        return get_torch_device(allow_xpu=True, allow_directml=True)
+        return get_torch_device(allow_xpu=True, allow_directml=True, allow_mps=True)
 
     def is_loaded(self) -> bool:
         return self.model is not None
@@ -75,11 +78,11 @@ class QwenCustomVoiceBackend:
             raise ValueError(f"Unknown model size: {model_size}")
         return QWEN_CV_HF_REPOS[model_size]
 
-    def _is_model_cached(self, model_size: Optional[str] = None) -> bool:
+    def _is_model_cached(self, model_size: str | None = None) -> bool:
         size = model_size or self.model_size
         return is_model_cached(self._get_model_path(size))
 
-    async def load_model_async(self, model_size: Optional[str] = None) -> None:
+    async def load_model_async(self, model_size: str | None = None) -> None:
         if model_size is None:
             model_size = self.model_size
 
@@ -135,8 +138,7 @@ class QwenCustomVoiceBackend:
             self.model = None
             self._current_model_size = None
 
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
+            empty_device_cache(self.device)
 
             logger.info("Qwen CustomVoice unloaded")
 
@@ -173,8 +175,8 @@ class QwenCustomVoiceBackend:
         text: str,
         voice_prompt: dict,
         language: str = "en",
-        seed: Optional[int] = None,
-        instruct: Optional[str] = None,
+        seed: int | None = None,
+        instruct: str | None = None,
     ) -> tuple[np.ndarray, int]:
         """
         Generate audio using Qwen CustomVoice.
@@ -206,6 +208,7 @@ class QwenCustomVoiceBackend:
                 "text": text,
                 "language": lang_name.capitalize() if lang_name != "auto" else "Auto",
                 "speaker": speaker,
+                "max_new_tokens": estimate_max_new_tokens(text),
             }
 
             # Only pass instruct if non-empty
