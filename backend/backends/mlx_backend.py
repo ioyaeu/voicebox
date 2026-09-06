@@ -20,6 +20,7 @@ from ..utils.hf_offline_patch import ensure_original_qwen_config_cached, patch_h
 patch_huggingface_hub_offline()
 ensure_original_qwen_config_cached()
 
+from ..utils.audio import estimate_max_new_tokens  # noqa: E402
 from ..utils.cache import cache_voice_prompt, get_cache_key, get_cached_voice_prompt  # noqa: E402
 from . import LANGUAGE_CODE_TO_NAME, WHISPER_HF_REPOS  # noqa: E402
 from .base import (  # noqa: E402
@@ -79,6 +80,8 @@ def ensure_realtime_stream_not_active(operation: str = "MLX inference") -> None:
 
 class MLXTTSBackend:
     """MLX-based TTS backend using mlx-audio."""
+
+    max_chunk_chars = 1000
 
     def __init__(self, model_size: str = "1.7B"):
         self.model = None
@@ -289,6 +292,7 @@ class MLXTTSBackend:
             # Extract voice prompt info
             ref_audio = voice_prompt.get("ref_audio") or voice_prompt.get("ref_audio_path")
             ref_text = voice_prompt.get("ref_text", "")
+            max_tokens = estimate_max_new_tokens(text)
 
             # Validate that the audio file exists
             if ref_audio and not Path(ref_audio).exists():
@@ -310,23 +314,29 @@ class MLXTTSBackend:
                     sig = inspect.signature(self.model.generate)
                     if "ref_audio" in sig.parameters:
                         # Generate with voice cloning
-                        for result in self.model.generate(text, ref_audio=ref_audio, ref_text=ref_text, lang_code=lang):
+                        for result in self.model.generate(
+                            text,
+                            ref_audio=ref_audio,
+                            ref_text=ref_text,
+                            lang_code=lang,
+                            max_tokens=max_tokens,
+                        ):
                             audio_chunks.append(np.array(result.audio))
                             sample_rate = result.sample_rate
                     else:
                         # Fallback: generate without voice cloning
-                        for result in self.model.generate(text, lang_code=lang):
+                        for result in self.model.generate(text, lang_code=lang, max_tokens=max_tokens):
                             audio_chunks.append(np.array(result.audio))
                             sample_rate = result.sample_rate
                 else:
                     # No voice prompt, generate normally
-                    for result in self.model.generate(text, lang_code=lang):
+                    for result in self.model.generate(text, lang_code=lang, max_tokens=max_tokens):
                         audio_chunks.append(np.array(result.audio))
                         sample_rate = result.sample_rate
             except Exception as e:
                 # If voice cloning fails, try without it
                 logger.warning("Voice cloning failed, generating without voice prompt: %s", e)
-                for result in self.model.generate(text, lang_code=lang):
+                for result in self.model.generate(text, lang_code=lang, max_tokens=max_tokens):
                     audio_chunks.append(np.array(result.audio))
                     sample_rate = result.sample_rate
 
