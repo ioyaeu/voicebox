@@ -49,7 +49,7 @@ These two layers communicate via HTTP on `localhost:17493`, with the frontend ma
 ### Tech Stack
 
 - **Framework**: FastAPI (Python 3.11+)
-- **TTS Engines**: Qwen3-TTS, Qwen CustomVoice, LuxTTS, Chatterbox, Chatterbox Turbo, TADA, Kokoro
+- **TTS Engines**: Qwen3-TTS, Qwen CustomVoice, LuxTTS, Chatterbox, Chatterbox Turbo, TADA, Kokoro, Voxtral
 - **Transcription**: Whisper (PyTorch or MLX-Whisper)
 - **Inference Backends**: MLX (Apple Silicon), PyTorch (CUDA / ROCm / XPU / DirectML / CPU)
 - **Database**: SQLite via SQLAlchemy
@@ -89,6 +89,8 @@ These two layers communicate via HTTP on `localhost:17493`, with the frontend ma
       <File name="chatterbox_turbo_backend.py" />
       <File name="hume_backend.py" />
       <File name="kokoro_backend.py" />
+      <File name="voxtral_backend.py" />
+      <Folder name="rvc" />
     </Folder>
     <Folder name="database">
       <File name="models.py" />
@@ -127,6 +129,7 @@ Shipped engines:
 | `chatterbox_turbo` | Chatterbox Turbo | Cloned |
 | `tada` | TADA | Cloned |
 | `kokoro` | Kokoro | Preset |
+| `voxtral` | Voxtral 4B TTS | Preset |
 
 See [TTS Engines](/developer/tts-engines) for the full contract and integration phases, and [PROJECT_STATUS.md](https://github.com/jamiepine/voicebox/blob/main/docs/PROJECT_STATUS.md) for candidates under evaluation.
 
@@ -159,7 +162,7 @@ See [GPU Acceleration](/overview/gpu-acceleration) for platform-specific notes a
 
 Core tables (see `backend/database/models.py`):
 
-- **`profiles`** — Voice profiles with `voice_type` discriminator (`cloned` | `preset` | `designed`), `preset_engine`, `preset_voice_id`, and `default_engine`.
+- **`profiles`** — Voice profiles with `voice_type` discriminator (`cloned` | `preset` | `designed` | `rvc`), `preset_engine`, `preset_voice_id`, `default_engine`, and RVC chain settings.
 - **`profile_samples`** — Reference audio clips + transcripts for cloned profiles. Empty for preset profiles.
 - **`generations`** — Generated audio with text, engine, model, language, seed, and duration.
 - **`generation_versions`** — Processed variants of a generation with different effects chains applied.
