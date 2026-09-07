@@ -379,7 +379,7 @@
       "play": "Riproduci campione",
       "pause": "Pausa campione",
       "stop": "Interrompi",
-            "stopAria": "Interrompi riproduzione",
+      "stopAria": "Interrompi riproduzione",
       "position": "Posizione riproduzione campione",
       "positionValue": "{{current}} di {{total}}"
     },
@@ -1069,6 +1069,10 @@
         "neverConnected": "mai connesso",
         "defaultOption": "(predefinita)",
         "removeAria": "Rimuovi associazione per {{client}}",
+        "plainText": "Testo semplice",
+        "plainTextTitle": "Rimuovere il markdown (codice, tabelle, link, enfasi) prima della lettura",
+        "maxCharsPlaceholder": "max caratteri",
+        "maxCharsTitle": "Limitare il testo letto, tagliato a fine frase (min 50, vuoto = nessun limite)",
         "add": {
           "title": "Aggiungi un'associazione",
           "clientIdPlaceholder": "id client (es. claude-code)",
@@ -1124,7 +1128,8 @@
         "title": "Passa al backend CPU",
         "description": "Disabilita l'accelerazione GPU. Potrai scaricare nuovamente il backend GPU in un secondo momento.",
         "button": "Passa a CPU"
-      },      "remove": {
+      },
+      "remove": {
         "title": "Rimuovi il backend CUDA",
         "description": "Elimina il file binario CUDA scaricato per liberare spazio sul disco.",
         "button": "Rimuovi"

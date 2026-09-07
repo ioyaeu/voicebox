@@ -362,6 +362,8 @@ class MCPClientBindingResponse(BaseModel):
         pattern="^(qwen|qwen_custom_voice|luxtts|chatterbox|chatterbox_turbo|tada|kokoro|voxtral)$",
     )
     default_personality: bool = False
+    default_plain_text: bool = False
+    default_max_chars: Optional[int] = Field(None, ge=50, le=10000)
     last_seen_at: Optional[datetime] = None
     created_at: datetime
     updated_at: datetime
@@ -381,6 +383,8 @@ class MCPClientBindingUpsert(BaseModel):
         pattern="^(qwen|qwen_custom_voice|luxtts|chatterbox|chatterbox_turbo|tada|kokoro|voxtral)$",
     )
     default_personality: bool = False
+    default_plain_text: bool = False
+    default_max_chars: Optional[int] = Field(None, ge=50, le=10000)
 
 
 class MCPClientBindingListResponse(BaseModel):
@@ -406,6 +410,16 @@ class SpeakRequest(BaseModel):
     language: Optional[str] = Field(
         None,
         pattern="^(zh|en|ja|ko|de|fr|ru|pt|es|it|he|ar|da|el|fi|hi|ms|nl|no|pl|sv|sw|tr)$",
+    )
+    plain_text: Optional[bool] = Field(
+        None,
+        description="Strip markdown (code fences, tables, links, emphasis) before TTS. When null, the per-client binding's default_plain_text flag decides.",
+    )
+    max_chars: Optional[int] = Field(
+        None,
+        ge=50,
+        le=10000,
+        description="Cap the spoken text at this many characters, cut on a sentence boundary. When null, the per-client binding's default_max_chars decides; unset means no cap.",
     )
 
 

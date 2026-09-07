@@ -287,6 +287,11 @@ class MCPClientBinding(Base):
     # When true, voicebox.speak routes through the profile's personality LLM
     # (rewrite) before TTS by default. Callers can still override per call.
     default_personality = Column(Boolean, nullable=False, default=False)
+    # Speech-friendly defaults for agents that hand us markdown: strip the
+    # markup before TTS, and cap the spoken length on a sentence boundary.
+    # Callers can still override both per call.
+    default_plain_text = Column(Boolean, nullable=False, default=False)
+    default_max_chars = Column(Integer, nullable=True)
     last_seen_at = Column(DateTime, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)

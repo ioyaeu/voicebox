@@ -291,6 +291,20 @@ def _migrate_mcp_bindings(engine, inspector, tables: set[str]) -> None:
             "default_personality BOOLEAN NOT NULL DEFAULT 0",
             "default_personality",
         )
+    if "default_plain_text" not in columns:
+        _add_column(
+            engine,
+            "mcp_client_bindings",
+            "default_plain_text BOOLEAN NOT NULL DEFAULT 0",
+            "default_plain_text",
+        )
+    if "default_max_chars" not in columns:
+        _add_column(
+            engine,
+            "mcp_client_bindings",
+            "default_max_chars INTEGER",
+            "default_max_chars",
+        )
     if "default_intent" in columns:
         if _supports_drop_column(engine):
             with engine.connect() as conn:

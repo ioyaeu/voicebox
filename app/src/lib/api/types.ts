@@ -555,6 +555,8 @@ export interface MCPClientBinding {
   profile_id: string | null;
   default_engine: string | null;
   default_personality: boolean;
+  default_plain_text: boolean;
+  default_max_chars: number | null;
   last_seen_at: string | null;
   created_at: string;
   updated_at: string;
@@ -566,6 +568,8 @@ export interface MCPClientBindingUpsert {
   profile_id?: string | null;
   default_engine?: string | null;
   default_personality?: boolean;
+  default_plain_text?: boolean;
+  default_max_chars?: number | null;
 }
 
 export interface MCPClientBindingListResponse {

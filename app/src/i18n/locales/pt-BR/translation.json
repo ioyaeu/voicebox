@@ -1064,6 +1064,10 @@
         "neverConnected": "nunca conectado",
         "defaultOption": "(padrão)",
         "removeAria": "Remover vínculo de {{client}}",
+        "plainText": "Texto simples",
+        "plainTextTitle": "Remover o markdown (código, tabelas, links, ênfase) antes de falar",
+        "maxCharsPlaceholder": "máx. caracteres",
+        "maxCharsTitle": "Limitar o texto falado, cortado no fim de uma frase (mín. 50, vazio = sem limite)",
         "add": {
           "title": "Adicionar um vínculo",
           "clientIdPlaceholder": "id do cliente (ex.: claude-code)",

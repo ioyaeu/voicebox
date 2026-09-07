@@ -1133,6 +1133,10 @@
         "neverConnected": "从未连接",
         "defaultOption": "(默认)",
         "removeAria": "移除 {{client}} 的绑定",
+        "plainText": "纯文本",
+        "plainTextTitle": "朗读前去除 Markdown（代码、表格、链接、强调）",
+        "maxCharsPlaceholder": "最大字符数",
+        "maxCharsTitle": "限制朗读的字符数，在句末截断（最少 50，留空 = 不限制）",
         "add": {
           "title": "添加绑定",
           "clientIdPlaceholder": "客户端 ID(例如 claude-code)",

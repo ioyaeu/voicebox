@@ -1133,6 +1133,10 @@
         "neverConnected": "未接続",
         "defaultOption": "(デフォルト)",
         "removeAria": "{{client}} のバインディングを削除",
+        "plainText": "プレーンテキスト",
+        "plainTextTitle": "読み上げ前にMarkdown（コード、表、リンク、強調）を取り除く",
+        "maxCharsPlaceholder": "最大文字数",
+        "maxCharsTitle": "読み上げる文字数を制限し、文末で区切る（最小50、空欄＝制限なし）",
         "add": {
           "title": "バインディングを追加",
           "clientIdPlaceholder": "クライアント ID(例:claude-code)",
