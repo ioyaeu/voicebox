@@ -650,6 +650,7 @@ def resolve_model_size_for_engine(
 
 async def load_engine_model(engine: str, model_size: str = "default") -> None:
     """Load a model for the given engine, handling engines with multiple model sizes."""
+    await unload_other_tts_models(engine)
     backend = get_tts_backend_for_engine(engine)
     if engine in ("qwen", "qwen_custom_voice"):
         await backend.load_model_async(model_size)
@@ -697,6 +698,35 @@ async def unload_backend(backend) -> None:
         await unload()
     else:
         backend.unload_model()
+
+
+async def unload_other_tts_models(active_engine: str) -> list[str]:
+    """Unload every loaded TTS backend except the engine about to run.
+
+    Generation jobs are serialized by the task queue, so switching engines at
+    the load boundary keeps only one heavyweight TTS model resident. Backend
+    instances stay cached as lightweight objects and can be loaded again later.
+    """
+    with _tts_backends_lock:
+        candidates = [
+            (engine, backend)
+            for engine, backend in _tts_backends.items()
+            if engine != active_engine
+        ]
+
+    unloaded_engines: list[str] = []
+    for engine, backend in candidates:
+        if not backend.is_loaded():
+            continue
+        await unload_backend(backend)
+        unloaded_engines.append(engine)
+
+    if unloaded_engines:
+        from ..utils.cache import clear_voice_prompt_memory_cache
+
+        clear_voice_prompt_memory_cache()
+
+    return unloaded_engines
 
 
 async def unload_model_by_config(config: ModelConfig) -> bool:

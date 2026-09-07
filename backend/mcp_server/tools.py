@@ -18,12 +18,11 @@ from fastmcp import FastMCP
 
 from .. import models
 from ..database import get_db
-from ..services import captures as captures_service
-from ..services import profiles as profiles_service
+from ..services import captures as captures_service, profiles as profiles_service
+from ..utils.speech_text import MAX_MAX_CHARS, MIN_MAX_CHARS, prepare_speech_text
 from . import events as mcp_events
 from .context import current_client_id, request_is_loopback
-from .resolve import resolve_profile
-
+from .resolve import resolve_bound_engine, resolve_profile
 
 logger = logging.getLogger(__name__)
 
@@ -40,7 +39,8 @@ def register_tools(mcp: FastMCP) -> None:
         description=(
             "Speak text in a Voicebox voice profile. Returns a generation id "
             "the caller can poll at /generate/{id}/status. Audio plays on the "
-            "user's speakers and is saved to the Captures / History tab."
+            "user's speakers. Audio is temporary by default; set keep_audio=true "
+            "to save it in the History tab."
         ),
     )
     async def voicebox_speak(
@@ -50,6 +50,9 @@ def register_tools(mcp: FastMCP) -> None:
         personality: bool | None = None,
         language: str | None = None,
         model_size: Literal["1.7B", "0.6B", "1B", "3B"] | None = None,
+        plain_text: bool | None = None,
+        max_chars: int | None = None,
+        keep_audio: bool = False,
     ) -> dict[str, Any]:
         """Speak ``text`` in a voice profile.
 
@@ -68,8 +71,25 @@ def register_tools(mcp: FastMCP) -> None:
         or "0.6B"; ``tada`` accepts "1B" or "3B". Other engines ignore it.
         Omit to use the engine default. Requesting a smaller variant (e.g.
         "0.6B") is faster and avoids reloading a heavier model between calls.
+
+        ``plain_text`` strips markdown (code fences, tables, links, emphasis)
+        before TTS — for agents that hand over their raw answer. ``max_chars``
+        caps the spoken text on a sentence boundary so a long answer becomes
+        a short summary. Both default to the per-client binding's
+        ``default_plain_text`` / ``default_max_chars``, then to off. They run
+        before any personality rewrite, so the LLM sees the trimmed text.
+
+        Audio is temporary by default and is removed after playback. Set
+        ``keep_audio=true`` when the user explicitly asks to keep, save,
+        export, or reuse the generated audio (for example, when the prompt
+        says "keep audio").
         """
         from ..database.models import MCPClientBinding
+
+        if max_chars is not None and not MIN_MAX_CHARS <= max_chars <= MAX_MAX_CHARS:
+            raise ValueError(
+                f"`max_chars` must be between {MIN_MAX_CHARS} and {MAX_MAX_CHARS}."
+            )
 
         db = next(get_db())
         try:
@@ -94,19 +114,40 @@ def register_tools(mcp: FastMCP) -> None:
             if resolved_personality is None and binding is not None:
                 resolved_personality = bool(binding.default_personality)
 
-            resolved_engine = engine
-            if resolved_engine is None and binding is not None:
-                resolved_engine = binding.default_engine
+            resolved_engine = resolve_bound_engine(
+                engine,
+                binding.default_engine if binding is not None else None,
+                vp,
+            )
+
+            resolved_plain_text = plain_text
+            if resolved_plain_text is None and binding is not None:
+                resolved_plain_text = bool(binding.default_plain_text)
+
+            resolved_max_chars = max_chars
+            if resolved_max_chars is None and binding is not None:
+                resolved_max_chars = binding.default_max_chars
+
+            spoken = prepare_speech_text(
+                text,
+                plain_text=bool(resolved_plain_text),
+                max_chars=resolved_max_chars,
+            )
+            if not spoken:
+                raise ValueError(
+                    "Nothing left to speak once markup was stripped — the text was only code, tables or links."
+                )
 
             use_persona = bool(resolved_personality) and bool(vp.personality)
             return await _speak(
                 profile_id=vp.id,
                 profile_name=vp.name,
-                text=text,
+                text=spoken,
                 engine=resolved_engine,
                 language=language,
                 personality=use_persona,
                 model_size=model_size,
+                keep_audio=keep_audio,
                 db=db,
             )
         finally:
@@ -237,6 +278,7 @@ async def _speak(
     language: str | None,
     personality: bool,
     model_size: str | None = None,
+    keep_audio: bool = False,
     db,
 ) -> dict[str, Any]:
     """Delegate to POST /generate — the route handles personality-rewrite
@@ -253,6 +295,7 @@ async def _speak(
         engine=engine,
         personality=personality,
         model_size=model_size,
+        keep_audio=keep_audio,
     )
     generation = await generate_speech(req, db)
     return _speak_response(generation, profile_name, source="mcp")

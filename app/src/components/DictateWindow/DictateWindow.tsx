@@ -109,6 +109,7 @@ export function DictateWindow() {
 
   const [speaking, setSpeaking] = useState<{
     generationId: string;
+    keepAudio: boolean;
     // Null while the backend is still generating audio; set to the
     // wall-clock timestamp when audio playback actually begins, so the
     // pill's elapsed counter only ticks while sound is coming out.
@@ -123,6 +124,13 @@ export function DictateWindow() {
   const statusSourceRef = useRef<EventSource | null>(null);
   const statusTimeoutRef = useRef<number | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
+
+  const deleteEphemeralGeneration = (generationId: string, keepAudio: boolean) => {
+    if (keepAudio) return;
+    apiClient.deleteGenerationAudio(generationId).catch((err) => {
+      console.warn('[dictate] failed to clean up temporary speech:', err);
+    });
+  };
 
   const clearStatusTimeout = () => {
     if (statusTimeoutRef.current !== null) {
@@ -146,10 +154,16 @@ export function DictateWindow() {
     setSpeaking(null);
   };
 
-  const startSpeakPlayback = (generationId: string) => {
+  const startSpeakPlayback = (generationId: string, keepAudio: boolean) => {
     const audio = new Audio(apiClient.getAudioUrl(generationId));
-    audio.onended = () => dismissSpeak(generationId);
-    audio.onerror = () => dismissSpeak(generationId);
+    audio.onended = () => {
+      dismissSpeak(generationId);
+      deleteEphemeralGeneration(generationId, keepAudio);
+    };
+    audio.onerror = () => {
+      dismissSpeak(generationId);
+      deleteEphemeralGeneration(generationId, keepAudio);
+    };
     // The pill window stays hidden through the ~1 s generation wait so the
     // user doesn't see a silent pill. We surface it the moment audio
     // actually starts playing, and that's also when the elapsed counter
@@ -157,9 +171,7 @@ export function DictateWindow() {
     audio.onplaying = () => {
       emit('dictate:show').catch(() => {});
       setSpeaking((prev) =>
-        prev && prev.generationId === generationId
-          ? { ...prev, startedAt: Date.now() }
-          : prev,
+        prev && prev.generationId === generationId ? { ...prev, startedAt: Date.now() } : prev,
       );
       setSpeakElapsed(0);
     };
@@ -167,6 +179,7 @@ export function DictateWindow() {
     audio.play().catch((err) => {
       console.warn('[dictate] audio.play failed:', err);
       dismissSpeak(generationId);
+      deleteEphemeralGeneration(generationId, keepAudio);
     });
   };
 
@@ -190,7 +203,7 @@ export function DictateWindow() {
         // Tear down any previous cycle — last speak wins.
         dismissSpeak();
 
-        setSpeaking({ generationId: id, startedAt: null });
+        setSpeaking({ generationId: id, keepAudio: false, startedAt: null });
         setSpeakElapsed(0);
 
         // Subscribe to this one generation's status. When it completes, the
@@ -211,12 +224,16 @@ export function DictateWindow() {
         }, 60_000);
         source.onmessage = (msg) => {
           try {
-            const data = JSON.parse(msg.data) as { status?: string };
+            const data = JSON.parse(msg.data) as { status?: string; keep_audio?: boolean };
             if (data.status === 'completed') {
               clearStatusTimeout();
               source.close();
               if (statusSourceRef.current === source) statusSourceRef.current = null;
-              startSpeakPlayback(id);
+              const keepAudio = Boolean(data.keep_audio);
+              setSpeaking((prev) =>
+                prev && prev.generationId === id ? { ...prev, keepAudio } : prev,
+              );
+              startSpeakPlayback(id, keepAudio);
             } else if (data.status === 'failed' || data.status === 'not_found') {
               clearStatusTimeout();
               source.close();

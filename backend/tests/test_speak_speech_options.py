@@ -1,0 +1,276 @@
+"""``plain_text`` / ``max_chars`` on ``voicebox.speak`` and ``POST /speak``.
+
+Both surfaces resolve the two knobs the same way as ``personality`` and
+``engine``: explicit argument first, then profile-owned engines for preset/RVC
+profiles, then the per-client binding default for flexible profiles. These
+tests run the real resolution code against a throwaway SQLite database and
+stub the generation step, so they pin what text reaches TTS without loading
+a model.
+"""
+
+from datetime import datetime, timedelta
+
+import pytest
+from fastmcp import FastMCP
+from fastmcp.exceptions import ToolError
+from starlette.requests import Request
+
+from backend import config, models
+from backend.database import get_db
+from backend.database.models import Generation as DBGeneration, MCPClientBinding, VoiceProfile
+from backend.mcp_server import events as mcp_events, tools
+from backend.mcp_server.context import current_client_id
+from backend.routes import generations
+from backend.routes.speak import speak
+from backend.services.history import delete_expired_ephemeral_generations
+
+CLIENT = "claude-code"
+MARKDOWN = (
+    "## Verdict\n\nVoici la **réponse finale**.\n\n```bash\nrm -rf /never-read\n```\n\n"
+    "| a | b |\n|---|---|\n| 1 | 2 |\n\nVoir [.mcp.json](.mcp.json) pour la suite. "
+    + "Encore une phrase de remplissage qui allonge le texte. "
+    * 4
+)
+
+
+@pytest.fixture
+def db(tmp_path, monkeypatch):
+    """Fresh schema in a temp data dir, one profile, one binding with speech defaults on."""
+    from backend.database import session as db_session
+
+    original = config.get_data_dir()
+    config.set_data_dir(str(tmp_path))
+    db_session.init_db()
+    monkeypatch.setattr(mcp_events, "publish", lambda *a, **k: None)
+    session = next(get_db())
+    session.add(VoiceProfile(id="p1", name="Siwis", language="fr"))
+    session.add(
+        MCPClientBinding(
+            client_id=CLIENT,
+            profile_id="p1",
+            default_plain_text=True,
+            default_max_chars=120,
+        )
+    )
+    session.commit()
+    try:
+        yield session
+    finally:
+        session.close()
+        config.set_data_dir(str(original))
+
+
+@pytest.fixture
+def captured_generation(monkeypatch):
+    """Stub the model-backed generate_speech; both surfaces import it lazily from routes.generations."""
+    captured = {}
+
+    class _FakeGeneration:
+        id = "gen-test"
+
+        def model_dump(self, mode="json"):
+            return {"id": self.id, "status": "generating"}
+
+    async def fake_generate_speech(req, db):
+        captured["req"] = req
+        return _FakeGeneration()
+
+    monkeypatch.setattr(generations, "generate_speech", fake_generate_speech)
+    return captured
+
+
+def _rest_request() -> Request:
+    return Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/speak",
+            "headers": [(b"x-voicebox-client-id", CLIENT.encode())],
+        }
+    )
+
+
+def _bind_mismatched_voxtral_preset(db) -> None:
+    """Create a Voxtral profile while the client binding still prefers Kokoro."""
+    db.add(
+        VoiceProfile(
+            id="p2",
+            name="Voxtral female",
+            language="fr",
+            voice_type="preset",
+            preset_engine="voxtral",
+            preset_voice_id="fr_female",
+            default_engine="voxtral",
+        )
+    )
+    binding = db.query(MCPClientBinding).filter_by(client_id=CLIENT).one()
+    binding.default_engine = "kokoro"
+    db.commit()
+
+
+# ── REST /speak ────────────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_rest_applies_binding_defaults(db, captured_generation):
+    await speak(models.SpeakRequest(text=MARKDOWN), _rest_request(), db)
+    spoken = captured_generation["req"].text
+    assert captured_generation["req"].keep_audio is False
+    assert "rm -rf" not in spoken
+    assert "|" not in spoken
+    assert "**" not in spoken
+    assert spoken.startswith("Verdict\nVoici la réponse finale.\nVoir .mcp.json")
+    assert len(spoken) <= 120
+    assert spoken.endswith(".")  # cut on a sentence end, not mid-word
+
+
+@pytest.mark.asyncio
+async def test_rest_profile_engine_beats_binding_default(db, captured_generation):
+    _bind_mismatched_voxtral_preset(db)
+
+    await speak(
+        models.SpeakRequest(text="Use the selected profile.", profile="Voxtral female"),
+        _rest_request(),
+        db,
+    )
+
+    # None lets the generation route resolve the preset's intrinsic Voxtral
+    # engine instead of applying the binding's unrelated Kokoro preference.
+    assert captured_generation["req"].engine is None
+
+
+@pytest.mark.asyncio
+async def test_rest_explicit_args_override_binding(db, captured_generation):
+    await speak(
+        models.SpeakRequest(text=MARKDOWN, plain_text=False, max_chars=10000),
+        _rest_request(),
+        db,
+    )
+    assert captured_generation["req"].text == MARKDOWN.strip()
+
+
+@pytest.mark.asyncio
+async def test_rest_can_keep_audio(db, captured_generation):
+    await speak(models.SpeakRequest(text="Keep this audio.", keep_audio=True), _rest_request(), db)
+    assert captured_generation["req"].keep_audio is True
+
+
+@pytest.mark.asyncio
+async def test_rest_rejects_text_that_strips_to_nothing(db, captured_generation):
+    from fastapi import HTTPException
+
+    with pytest.raises(HTTPException, match="Nothing left to speak") as exc:
+        await speak(models.SpeakRequest(text="```py\nprint(1)\n```"), _rest_request(), db)
+    assert exc.value.status_code == 400
+    assert "req" not in captured_generation
+
+
+def test_rest_schema_bounds_max_chars():
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError, match="max_chars"):
+        models.SpeakRequest(text="x", max_chars=10)
+
+
+# ── MCP voicebox.speak ─────────────────────────────────────────────────────
+
+
+@pytest.fixture
+def captured_speak(monkeypatch):
+    """Capture what the tool hands to ``_speak`` (the closure resolves it as a module global)."""
+    captured = {}
+
+    async def fake_speak(**kwargs):
+        captured.update(kwargs)
+        return {"generation_id": "gen-test", "status": "generating"}
+
+    monkeypatch.setattr(tools, "_speak", fake_speak)
+    return captured
+
+
+@pytest.fixture
+def mcp():
+    server = FastMCP("test")
+    tools.register_tools(server)
+    return server
+
+
+@pytest.fixture
+def as_client():
+    token = current_client_id.set(CLIENT)
+    try:
+        yield
+    finally:
+        current_client_id.reset(token)
+
+
+@pytest.mark.asyncio
+async def test_tool_applies_binding_defaults(db, mcp, captured_speak, as_client):
+    await mcp.call_tool("voicebox.speak", {"text": MARKDOWN})
+    assert "rm -rf" not in captured_speak["text"]
+    assert len(captured_speak["text"]) <= 120
+    assert captured_speak["keep_audio"] is False
+
+
+@pytest.mark.asyncio
+async def test_tool_profile_engine_beats_binding_default(db, mcp, captured_speak, as_client):
+    _bind_mismatched_voxtral_preset(db)
+
+    await mcp.call_tool(
+        "voicebox.speak",
+        {"text": "Use the selected profile.", "profile": "Voxtral female"},
+    )
+
+    assert captured_speak["engine"] is None
+
+
+@pytest.mark.asyncio
+async def test_tool_explicit_args_override_binding(db, mcp, captured_speak, as_client):
+    await mcp.call_tool("voicebox.speak", {"text": MARKDOWN, "plain_text": False, "max_chars": 10000})
+    assert captured_speak["text"] == MARKDOWN.strip()
+
+
+@pytest.mark.asyncio
+async def test_tool_can_keep_audio(db, mcp, captured_speak, as_client):
+    await mcp.call_tool("voicebox.speak", {"text": "Keep this audio.", "keep_audio": True})
+    assert captured_speak["keep_audio"] is True
+
+
+@pytest.mark.asyncio
+async def test_tool_rejects_small_max_chars(db, mcp, captured_speak, as_client):
+    with pytest.raises(ToolError, match="between 50 and 10000"):
+        await mcp.call_tool("voicebox.speak", {"text": "hello there", "max_chars": 10})
+    assert "text" not in captured_speak
+
+
+@pytest.mark.asyncio
+async def test_tool_rejects_large_max_chars(db, mcp, captured_speak, as_client):
+    with pytest.raises(ToolError, match="between 50 and 10000"):
+        await mcp.call_tool("voicebox.speak", {"text": "hello there", "max_chars": 10001})
+    assert "text" not in captured_speak
+
+
+@pytest.mark.asyncio
+async def test_tool_rejects_text_that_strips_to_nothing(db, mcp, captured_speak, as_client):
+    with pytest.raises(ToolError, match="Nothing left to speak"):
+        await mcp.call_tool("voicebox.speak", {"text": "```\ncode\n```"})
+
+
+def test_expired_ephemeral_audio_is_deleted_but_history_is_kept(db):
+    db.add(
+        DBGeneration(
+            id="temporary-generation",
+            profile_id="p1",
+            text="temporary",
+            audio_path="",
+            duration=1,
+            status="completed",
+            keep_audio=False,
+            created_at=datetime.utcnow() - timedelta(minutes=20),
+        )
+    )
+    db.commit()
+
+    assert delete_expired_ephemeral_generations(db) == 1
+    generation = db.query(DBGeneration).filter_by(id="temporary-generation").one()
+    assert generation.audio_path is None

@@ -85,6 +85,9 @@ class Generation(Base):
     status = Column(String, default="completed")
     error = Column(Text, nullable=True)
     is_favorited = Column(Boolean, default=False)
+    # Agent speech is ephemeral unless the caller explicitly asks to retain it.
+    # Existing/manual generations default to kept audio for backwards compatibility.
+    keep_audio = Column(Boolean, nullable=False, default=True)
     # Origin of this generation — "manual" for plain /generate calls,
     # "personality_speak" for rows whose text was rewritten through the
     # profile's personality LLM before TTS. Future sources (bulk import,
@@ -287,6 +290,11 @@ class MCPClientBinding(Base):
     # When true, voicebox.speak routes through the profile's personality LLM
     # (rewrite) before TTS by default. Callers can still override per call.
     default_personality = Column(Boolean, nullable=False, default=False)
+    # Speech-friendly defaults for agents that hand us markdown: strip the
+    # markup before TTS, and cap the spoken length on a sentence boundary.
+    # Callers can still override both per call.
+    default_plain_text = Column(Boolean, nullable=False, default=False)
+    default_max_chars = Column(Integer, nullable=True)
     last_seen_at = Column(DateTime, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)

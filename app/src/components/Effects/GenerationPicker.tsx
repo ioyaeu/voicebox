@@ -21,7 +21,7 @@ export function GenerationPicker({ selectedId, onSelect, className }: Generation
 
   const completedGenerations = useMemo(() => {
     if (!historyData?.items) return [];
-    return historyData.items.filter((gen) => gen.status === 'completed');
+    return historyData.items.filter((gen) => gen.status === 'completed' && Boolean(gen.audio_path));
   }, [historyData]);
 
   const filtered = useMemo(() => {

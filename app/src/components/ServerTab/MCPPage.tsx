@@ -2,6 +2,8 @@ import { Check, Copy, Plug, Trash2, Waypoints } from 'lucide-react';
 import { useState } from 'react';
 import { Trans, useTranslation } from 'react-i18next';
 import { Button } from '@/components/ui/button';
+import { Checkbox } from '@/components/ui/checkbox';
+import { Input } from '@/components/ui/input';
 import {
   Select,
   SelectContent,
@@ -9,11 +11,12 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
+import type { MCPClientBinding, MCPClientBindingUpsert } from '@/lib/api/types';
 import { useMCPBindings } from '@/lib/hooks/useMCPBindings';
 import { useProfiles } from '@/lib/hooks/useProfiles';
 import { useCaptureSettings } from '@/lib/hooks/useSettings';
-import { useServerStore } from '@/stores/serverStore';
 import { formatDate } from '@/lib/utils/format';
+import { useServerStore } from '@/stores/serverStore';
 import { SettingRow, SettingSection } from './SettingRow';
 
 function getStdioShimCommand(): string {
@@ -39,7 +42,7 @@ function getStdioShimCommand(): string {
 export function MCPPage() {
   const { t } = useTranslation();
   const serverUrl = useServerStore((s) => s.serverUrl);
-  const { bindings, upsertAsync, remove } = useMCPBindings();
+  const { bindings, upsertAsync, updateAsync, remove } = useMCPBindings();
   const { data: profiles } = useProfiles();
   const { settings: captureSettings, update: updateCapture } = useCaptureSettings();
 
@@ -51,6 +54,15 @@ export function MCPPage() {
   const [newLabel, setNewLabel] = useState('');
   const [newProfileId, setNewProfileId] = useState('');
   const [adding, setAdding] = useState(false);
+
+  const saveBinding = (b: MCPClientBinding, patch: Partial<MCPClientBindingUpsert>) =>
+    updateAsync(b, patch);
+
+  const commitMaxChars = (b: MCPClientBinding, raw: string) => {
+    const trimmed = raw.trim();
+    const next = trimmed === '' ? null : Math.min(10000, Math.max(50, Number(trimmed) || 50));
+    if (next !== b.default_max_chars) saveBinding(b, { default_max_chars: next });
+  };
 
   const handleAdd = async () => {
     if (!newClientId.trim()) return;
@@ -135,9 +147,7 @@ export function MCPPage() {
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="__default__">
-                    {t('settings.mcp.defaultVoice.none')}
-                  </SelectItem>
+                  <SelectItem value="__default__">{t('settings.mcp.defaultVoice.none')}</SelectItem>
                   {(profiles ?? []).map((p) => (
                     <SelectItem key={p.id} value={p.id}>
                       {p.name}
@@ -162,19 +172,21 @@ export function MCPPage() {
               {bindings.map((b) => (
                 <div
                   key={b.client_id}
-                  className="py-3 grid grid-cols-[1fr_auto_auto] gap-4 items-center"
+                  className="py-3 grid grid-cols-1 gap-3 items-center sm:grid-cols-[minmax(0,1fr)_auto] lg:grid-cols-[minmax(0,1fr)_180px_auto_104px_auto]"
                 >
                   <div className="min-w-0">
-                    <div className="font-medium text-sm truncate">
-                      {b.label || b.client_id}
-                    </div>
+                    <div className="font-medium text-sm truncate">{b.label || b.client_id}</div>
                     <div className="text-xs text-muted-foreground truncate">
                       <code className="text-[11px]">{b.client_id}</code>
                       {' · '}
                       {b.last_seen_at ? (
-                        <span title={t('settings.mcp.bindings.lastSeenTitle', { when: b.last_seen_at })}>
+                        <span
+                          title={t('settings.mcp.bindings.lastSeenTitle', { when: b.last_seen_at })}
+                        >
                           <Plug className="inline h-3 w-3 text-emerald-500" />{' '}
-                          {t('settings.mcp.bindings.lastSeen', { when: formatDate(b.last_seen_at) })}
+                          {t('settings.mcp.bindings.lastSeen', {
+                            when: formatDate(b.last_seen_at),
+                          })}
                         </span>
                       ) : (
                         <span>{t('settings.mcp.bindings.neverConnected')}</span>
@@ -184,14 +196,10 @@ export function MCPPage() {
                   <Select
                     value={b.profile_id ?? '__default__'}
                     onValueChange={(v) =>
-                      upsertAsync({
-                        client_id: b.client_id,
-                        label: b.label,
-                        profile_id: v === '__default__' ? null : v,
-                      })
+                      saveBinding(b, { profile_id: v === '__default__' ? null : v })
                     }
                   >
-                    <SelectTrigger className="w-[180px]">
+                    <SelectTrigger className="w-full sm:w-[180px]">
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
@@ -205,6 +213,34 @@ export function MCPPage() {
                       ))}
                     </SelectContent>
                   </Select>
+                  <label
+                    htmlFor={`mcp-plain-text-${b.client_id}`}
+                    className="flex items-center gap-2 text-xs text-muted-foreground whitespace-nowrap cursor-pointer"
+                    title={t('settings.mcp.bindings.plainTextTitle')}
+                  >
+                    <Checkbox
+                      id={`mcp-plain-text-${b.client_id}`}
+                      checked={b.default_plain_text}
+                      onCheckedChange={(v) => saveBinding(b, { default_plain_text: v })}
+                    />
+                    {t('settings.mcp.bindings.plainText')}
+                  </label>
+                  <Input
+                    // Uncontrolled on purpose: commit on blur / Enter, not per keystroke.
+                    key={`${b.client_id}:${b.default_max_chars ?? ''}`}
+                    type="number"
+                    min={50}
+                    max={10000}
+                    step={50}
+                    defaultValue={b.default_max_chars ?? ''}
+                    placeholder={t('settings.mcp.bindings.maxCharsPlaceholder')}
+                    title={t('settings.mcp.bindings.maxCharsTitle')}
+                    className="h-9 w-full px-2 text-xs sm:w-[104px]"
+                    onBlur={(e) => commitMaxChars(b, e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') e.currentTarget.blur();
+                    }}
+                  />
                   <Button
                     size="icon"
                     variant="ghost"
@@ -254,11 +290,7 @@ export function MCPPage() {
                 </SelectContent>
               </Select>
             </div>
-            <Button
-              size="sm"
-              onClick={handleAdd}
-              disabled={!newClientId.trim() || adding}
-            >
+            <Button size="sm" onClick={handleAdd} disabled={!newClientId.trim() || adding}>
               {t('settings.mcp.bindings.add.action')}
             </Button>
           </div>

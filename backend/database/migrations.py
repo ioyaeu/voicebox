@@ -199,6 +199,8 @@ def _migrate_generations(engine, inspector, tables: set[str]) -> None:
         _add_column(engine, "generations", "model_size VARCHAR", "model_size")
     if "is_favorited" not in columns:
         _add_column(engine, "generations", "is_favorited BOOLEAN DEFAULT 0", "is_favorited")
+    if "keep_audio" not in columns:
+        _add_column(engine, "generations", "keep_audio BOOLEAN NOT NULL DEFAULT 1", "keep_audio")
     if "source" not in columns:
         _add_column(
             engine,
@@ -290,6 +292,20 @@ def _migrate_mcp_bindings(engine, inspector, tables: set[str]) -> None:
             "mcp_client_bindings",
             "default_personality BOOLEAN NOT NULL DEFAULT 0",
             "default_personality",
+        )
+    if "default_plain_text" not in columns:
+        _add_column(
+            engine,
+            "mcp_client_bindings",
+            "default_plain_text BOOLEAN NOT NULL DEFAULT 0",
+            "default_plain_text",
+        )
+    if "default_max_chars" not in columns:
+        _add_column(
+            engine,
+            "mcp_client_bindings",
+            "default_max_chars INTEGER",
+            "default_max_chars",
         )
     if "default_intent" in columns:
         if _supports_drop_column(engine):

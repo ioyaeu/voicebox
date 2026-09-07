@@ -16,8 +16,8 @@ from sqlalchemy.orm import Session
 from .. import models
 from ..database import MCPClientBinding, get_db
 from ..mcp_server import events as mcp_events
-from ..mcp_server.resolve import resolve_profile
-
+from ..mcp_server.resolve import resolve_bound_engine, resolve_profile
+from ..utils.speech_text import prepare_speech_text
 
 logger = logging.getLogger(__name__)
 
@@ -65,19 +65,37 @@ async def speak(
     if personality_flag is None and binding is not None:
         personality_flag = bool(binding.default_personality)
 
-    engine = data.engine
-    if engine is None and binding is not None:
-        engine = binding.default_engine
+    engine = resolve_bound_engine(
+        data.engine,
+        binding.default_engine if binding is not None else None,
+        profile,
+    )
+
+    # Speech-friendly transforms run before the personality rewrite inside
+    # generate_speech, so the LLM sees the stripped, capped text.
+    plain_text = data.plain_text
+    if plain_text is None and binding is not None:
+        plain_text = bool(binding.default_plain_text)
+    max_chars = data.max_chars
+    if max_chars is None and binding is not None:
+        max_chars = binding.default_max_chars
+    spoken = prepare_speech_text(data.text, plain_text=bool(plain_text), max_chars=max_chars)
+    if not spoken:
+        raise HTTPException(
+            status_code=400,
+            detail="Nothing left to speak once markup was stripped — the text was only code, tables or links.",
+        )
 
     from .generations import generate_speech
 
     generation = await generate_speech(
         models.GenerationRequest(
             profile_id=profile.id,
-            text=data.text,
+            text=spoken,
             language=data.language or "en",
             engine=engine,
             personality=bool(personality_flag),
+            keep_audio=data.keep_audio,
         ),
         db,
     )

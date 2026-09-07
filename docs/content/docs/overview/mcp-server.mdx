@@ -119,6 +119,9 @@ voicebox.speak({
   engine?: "qwen",               // qwen | qwen_custom_voice | luxtts | chatterbox | chatterbox_turbo | tada | kokoro
   personality?: true,            // rewrite via the profile's personality LLM before TTS; default comes from the per-client binding
   language?: "en",
+  plain_text?: true,             // strip markdown (code fences, tables, links, emphasis) before TTS; default from binding
+  max_chars?: 600,               // cap the spoken text on a sentence boundary (min 50); default from binding
+  keep_audio?: true,             // keep the audio in History; temporary by default
 })
 ```
 
@@ -137,6 +140,15 @@ Returns:
 - **Plain TTS** — `personality: false` (or omitted + binding default is false). Text is spoken as-is.
 - **Persona mode** — `personality: true` and the profile must have a personality prompt set.
   The LLM rewrites the text in character before TTS. See [Voice Personalities](/overview/voice-personalities).
+- **Speech-friendly text** — `plain_text: true` drops fenced code and tables, keeps link labels,
+  and unwraps headings, bullets and emphasis; `max_chars` keeps the longest leading run that
+  fits, cut where the TTS chunker would cut (sentence end, then clause, then whitespace).
+  Both run *before* any personality rewrite. Meant for agents that hand over a raw markdown
+  answer — a Claude Code `Stop` hook passing `${last_assistant_message}`, for instance. A
+  text that strips down to nothing (code only) is rejected rather than spoken.
+- **Temporary agent speech** — audio is removed after playback by default, so routine agent
+  notifications do not accumulate in History. Set `keep_audio: true` when the user asks to
+  keep, save, export, or reuse the audio — for example when the prompt says "keep audio".
 
 ### `voicebox.transcribe`
 
@@ -196,6 +208,8 @@ carries:
 | `profile_id` | The voice this client uses when `profile` isn't passed. |
 | `default_engine` | Override the TTS engine for this client. |
 | `default_personality` | When true, `voicebox.speak` routes through the profile's personality LLM (rewrite) by default. |
+| `default_plain_text` | When true, strip markdown before TTS by default (see `plain_text`). |
+| `default_max_chars` | Cap the spoken text by default (see `max_chars`); empty means no cap. |
 | `last_seen_at` | Last time the server saw a request from this client. |
 
 `last_seen_at` is stamped automatically by middleware on every `/mcp/*`
@@ -227,8 +241,8 @@ curl -X POST http://127.0.0.1:17493/speak \
 ```
 
 Body fields match the MCP tool: `text`, optional `profile`, `engine`,
-`personality`, `language`. Returns a `GenerationResponse` — the same shape as
-`POST /generate`.
+`personality`, `language`, `plain_text`, `max_chars`, `keep_audio`. Returns a
+`GenerationResponse` — the same shape as `POST /generate`.
 
 ## Debugging
 

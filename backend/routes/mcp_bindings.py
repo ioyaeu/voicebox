@@ -56,6 +56,8 @@ async def upsert_mcp_binding(
     row.profile_id = data.profile_id
     row.default_engine = data.default_engine
     row.default_personality = data.default_personality
+    row.default_plain_text = data.default_plain_text
+    row.default_max_chars = data.default_max_chars
     row.updated_at = datetime.now(timezone.utc)
     db.commit()
     db.refresh(row)

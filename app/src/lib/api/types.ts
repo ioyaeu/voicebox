@@ -95,6 +95,7 @@ export interface GenerationRequest {
     | 'tada'
     | 'kokoro'
     | 'voxtral'
+    | 'rvc'
     // `null` explicitly defers engine choice to the profile — the backend
     // resolves the base engine server-side for rvc profiles (TTS→RVC chain).
     | null;
@@ -104,6 +105,7 @@ export interface GenerationRequest {
   max_chunk_chars?: number;
   crossfade_ms?: number;
   normalize?: boolean;
+  keep_audio?: boolean;
   effects_chain?: EffectConfig[];
 }
 
@@ -123,7 +125,7 @@ export interface GenerationResponse {
   profile_id: string;
   text: string;
   language: string;
-  audio_path?: string;
+  audio_path?: string | null;
   duration?: number;
   seed?: number;
   instruct?: string;
@@ -132,6 +134,7 @@ export interface GenerationResponse {
   status: 'loading_model' | 'generating' | 'converting' | 'completed' | 'failed';
   error?: string;
   is_favorited?: boolean;
+  keep_audio?: boolean;
   created_at: string;
   versions?: GenerationVersionResponse[];
   active_version_id?: string;
@@ -555,6 +558,8 @@ export interface MCPClientBinding {
   profile_id: string | null;
   default_engine: string | null;
   default_personality: boolean;
+  default_plain_text: boolean;
+  default_max_chars: number | null;
   last_seen_at: string | null;
   created_at: string;
   updated_at: string;
@@ -566,6 +571,8 @@ export interface MCPClientBindingUpsert {
   profile_id?: string | null;
   default_engine?: string | null;
   default_personality?: boolean;
+  default_plain_text?: boolean;
+  default_max_chars?: number | null;
 }
 
 export interface MCPClientBindingListResponse {

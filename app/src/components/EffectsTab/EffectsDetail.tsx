@@ -57,7 +57,9 @@ export function EffectsDetail() {
   const { data: historyData } = useHistory({ limit: 1 });
   useEffect(() => {
     if (!previewGenId && historyData?.items?.length) {
-      const first = historyData.items.find((g) => g.status === 'completed');
+      const first = historyData.items.find(
+        (g) => g.status === 'completed' && Boolean(g.audio_path),
+      );
       if (first) setPreviewGenId(first.id);
     }
   }, [historyData, previewGenId]);

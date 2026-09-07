@@ -1064,6 +1064,10 @@
         "neverConnected": "연결된 적 없음",
         "defaultOption": "(기본값)",
         "removeAria": "{{client}} 바인딩 제거",
+        "plainText": "일반 텍스트",
+        "plainTextTitle": "말하기 전에 마크다운(코드, 표, 링크, 강조)을 제거",
+        "maxCharsPlaceholder": "최대 글자 수",
+        "maxCharsTitle": "읽어 주는 글자 수를 제한하고 문장 끝에서 자름(최소 50, 비우면 제한 없음)",
         "add": {
           "title": "바인딩 추가",
           "clientIdPlaceholder": "클라이언트 ID (예: claude-code)",

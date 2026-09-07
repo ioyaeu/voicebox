@@ -471,7 +471,8 @@ export function HistoryTable() {
                 gen.status === 'converting';
               const isGenerating = isInProgress;
               const isFailed = gen.status === 'failed';
-              const isPlayable = !isGenerating && !isFailed;
+              const hasAudio = Boolean(gen.audio_path);
+              const isPlayable = !isGenerating && !isFailed && hasAudio;
               const hasVersions = gen.versions && gen.versions.length > 1;
               const isVersionsExpanded = expandedVersionsId === gen.id;
               const isCancelling =
@@ -498,9 +499,11 @@ export function HistoryTable() {
                         ? `Generating speech for ${gen.profile_name}...`
                         : isFailed
                           ? `Generation failed for ${gen.profile_name}`
-                          : isCurrentlyPlaying
-                            ? `Sample from ${gen.profile_name}, ${formatDuration(gen.duration ?? 0)}, ${formatDate(gen.created_at)}. Playing. Press Enter to restart.`
-                            : `Sample from ${gen.profile_name}, ${formatDuration(gen.duration ?? 0)}, ${formatDate(gen.created_at)}. Press Enter to play.`
+                          : !hasAudio
+                            ? t('history.audioUnavailable')
+                            : isCurrentlyPlaying
+                              ? `Sample from ${gen.profile_name}, ${formatDuration(gen.duration ?? 0)}, ${formatDate(gen.created_at)}. Playing. Press Enter to restart.`
+                              : `Sample from ${gen.profile_name}, ${formatDuration(gen.duration ?? 0)}, ${formatDate(gen.created_at)}. Press Enter to play.`
                     }
                     onMouseDown={(e) => {
                       if (!isPlayable) return;
@@ -539,9 +542,13 @@ export function HistoryTable() {
                         </span>
                         {isFailed ? (
                           <span className="text-xs text-destructive">Failed</span>
-                        ) : !isGenerating ? (
+                        ) : !isGenerating && hasAudio ? (
                           <span className="text-xs text-muted-foreground">
                             {formatDuration(gen.duration ?? 0)}
+                          </span>
+                        ) : !isGenerating ? (
+                          <span className="text-xs text-muted-foreground">
+                            {t('history.audioUnavailable')}
                           </span>
                         ) : null}
                       </div>
@@ -657,30 +664,34 @@ export function HistoryTable() {
                             </Button>
                           </DropdownMenuTrigger>
                           <DropdownMenuContent align="end">
-                            <DropdownMenuItem
-                              onClick={() => handlePlay(gen.id, gen.text, gen.profile_id)}
-                            >
-                              <Play className="mr-2 h-4 w-4" />
-                              {t('history.actions.play')}
-                            </DropdownMenuItem>
-                            <DropdownMenuItem
-                              onClick={() => handleDownloadAudio(gen.id, gen.text)}
-                              disabled={exportGenerationAudio.isPending}
-                            >
-                              <Download className="mr-2 h-4 w-4" />
-                              {t('history.actions.exportAudio')}
-                            </DropdownMenuItem>
-                            <DropdownMenuItem
-                              onClick={() => handleExportPackage(gen.id, gen.text)}
-                              disabled={exportGeneration.isPending}
-                            >
-                              <FileArchive className="mr-2 h-4 w-4" />
-                              {t('history.actions.exportPackage')}
-                            </DropdownMenuItem>
-                            <DropdownMenuItem onClick={() => handleApplyEffects(gen.id)}>
-                              <Wand2 className="mr-2 h-4 w-4" />
-                              {t('history.actions.applyEffects')}
-                            </DropdownMenuItem>
+                            {hasAudio && (
+                              <>
+                                <DropdownMenuItem
+                                  onClick={() => handlePlay(gen.id, gen.text, gen.profile_id)}
+                                >
+                                  <Play className="mr-2 h-4 w-4" />
+                                  {t('history.actions.play')}
+                                </DropdownMenuItem>
+                                <DropdownMenuItem
+                                  onClick={() => handleDownloadAudio(gen.id, gen.text)}
+                                  disabled={exportGenerationAudio.isPending}
+                                >
+                                  <Download className="mr-2 h-4 w-4" />
+                                  {t('history.actions.exportAudio')}
+                                </DropdownMenuItem>
+                                <DropdownMenuItem
+                                  onClick={() => handleExportPackage(gen.id, gen.text)}
+                                  disabled={exportGeneration.isPending}
+                                >
+                                  <FileArchive className="mr-2 h-4 w-4" />
+                                  {t('history.actions.exportPackage')}
+                                </DropdownMenuItem>
+                                <DropdownMenuItem onClick={() => handleApplyEffects(gen.id)}>
+                                  <Wand2 className="mr-2 h-4 w-4" />
+                                  {t('history.actions.applyEffects')}
+                                </DropdownMenuItem>
+                              </>
+                            )}
                             <DropdownMenuItem onClick={() => handleRegenerate(gen.id)}>
                               <RotateCcw className="mr-2 h-4 w-4" />
                               {t('history.actions.regenerate')}

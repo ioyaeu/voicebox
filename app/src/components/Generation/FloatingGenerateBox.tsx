@@ -1,7 +1,7 @@
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { useMatchRoute } from '@tanstack/react-router';
 import { AnimatePresence, motion } from 'framer-motion';
-import { Dices, Loader2, SlidersHorizontal, Sparkles, Wand2, Waves } from 'lucide-react';
+import { Dices, Loader2, SlidersHorizontal, Sparkles, Wand2 } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Button } from '@/components/ui/button';
@@ -24,7 +24,11 @@ import { cn } from '@/lib/utils/cn';
 import { useGenerationStore } from '@/stores/generationStore';
 import { useStoryStore } from '@/stores/storyStore';
 import { useUIStore } from '@/stores/uiStore';
-import { EngineModelSelector, resolveModelSizeForEngine } from './EngineModelSelector';
+import {
+  EngineModelSelector,
+  isProfileCompatibleWithEngine,
+  resolveModelSizeForEngine,
+} from './EngineModelSelector';
 import { ParalinguisticInput } from './ParalinguisticInput';
 
 interface FloatingGenerateBoxProps {
@@ -102,6 +106,7 @@ export function FloatingGenerateBox({
       return preset?.effects_chain;
     },
   });
+  const watchedEngine = form.watch('engine') || 'qwen';
 
   // Click away handler to collapse the box
   useEffect(() => {
@@ -136,71 +141,47 @@ export function FloatingGenerateBox({
   // Set first voice as default if none selected
   useEffect(() => {
     if (!selectedProfileId && profiles && profiles.length > 0) {
-      setSelectedProfileId(profiles[0].id);
+      const firstCompatible = profiles.find((profile) =>
+        isProfileCompatibleWithEngine(profile, watchedEngine),
+      );
+      if (firstCompatible) setSelectedProfileId(firstCompatible.id);
     }
-  }, [selectedProfileId, profiles, setSelectedProfileId]);
+  }, [selectedProfileId, profiles, setSelectedProfileId, watchedEngine]);
 
   // Sync engine selection to global store so ProfileList can filter
-  const watchedEngine = form.watch('engine');
   useEffect(() => {
     if (watchedEngine) {
       setSelectedEngine(watchedEngine);
     }
   }, [watchedEngine, setSelectedEngine]);
 
-  // Sync generation form language, engine, and effects with selected profile
-  type EngineValue =
-    | 'qwen'
-    | 'luxtts'
-    | 'chatterbox'
-    | 'chatterbox_turbo'
-    | 'tada'
-    | 'kokoro'
-    | 'voxtral'
-    | 'qwen_custom_voice';
+  // Sync generation form language and effects with the active engine/profile.
   useEffect(() => {
-    // Auto-switch engine to match the profile.
-    if (selectedProfile?.voice_type === 'rvc') {
-      if (selectedProfile.language) {
-        form.setValue('language', selectedProfile.language as LanguageCode);
-      }
-      // RVC owns its base engine server-side (the request sends engine=null and
-      // "rvc" isn't a valid form engine). Keep a non-preset TTS engine selected
-      // so the form stays valid and the profile picker treats rvc voices as
-      // supported.
-      const currentEngine = form.getValues('engine');
-      const presetEngines = new Set(['kokoro', 'qwen_custom_voice', 'voxtral']);
-      if (!currentEngine || presetEngines.has(currentEngine)) {
-        form.setValue('engine', 'qwen');
-      }
-    } else if (selectedProfile) {
-      const engine = selectedProfile.default_engine ?? selectedProfile.preset_engine;
-      if (engine) {
-        const profileLanguage = selectedProfile.language as LanguageCode;
-        const modelSize = resolveModelSizeForEngine(
-          engine,
+    const languageEngine = isRvcProfile
+      ? selectedProfile?.rvc_base_voice?.split(':')[0] || 'kokoro'
+      : watchedEngine;
+    const modelSize = isRvcProfile
+      ? form.getValues('modelSize')
+      : resolveModelSizeForEngine(
+          watchedEngine,
           form.getValues('modelSize'),
-          profileLanguage,
+          selectedProfile?.language,
         );
-        const languageOptions = getLanguageOptionsForEngine(engine, modelSize);
-        const language = languageOptions.some((option) => option.value === profileLanguage)
-          ? profileLanguage
-          : languageOptions[0]?.value || 'en';
+    const languageOptions = getLanguageOptionsForEngine(languageEngine, modelSize);
+    const profileLanguage = selectedProfile?.language as LanguageCode | undefined;
+    const currentLanguage = form.getValues('language');
+    const language =
+      (profileLanguage && languageOptions.some((option) => option.value === profileLanguage)
+        ? profileLanguage
+        : languageOptions.some((option) => option.value === currentLanguage)
+          ? currentLanguage
+          : languageOptions[0]?.value) || 'en';
 
-        form.setValue('engine', engine as EngineValue);
-        form.setValue('modelSize', modelSize);
-        form.setValue('language', language);
-      } else if (selectedProfile.voice_type !== 'preset') {
-        if (selectedProfile.language) {
-          form.setValue('language', selectedProfile.language as LanguageCode);
-        }
-        // Cloned/designed profile with no default — ensure a compatible (non-preset) engine
-        const currentEngine = form.getValues('engine');
-        const presetEngines = new Set(['kokoro', 'qwen_custom_voice', 'voxtral']);
-        if (currentEngine && presetEngines.has(currentEngine)) {
-          form.setValue('engine', 'qwen');
-        }
-      }
+    if (language !== currentLanguage) {
+      form.setValue('language', language);
+    }
+    if (!isRvcProfile && modelSize !== form.getValues('modelSize')) {
+      form.setValue('modelSize', modelSize);
     }
     // Pre-fill effects from profile defaults
     if (
@@ -229,7 +210,7 @@ export function FloatingGenerateBox({
     if (selectedProfile && !selectedProfile.personality?.trim()) {
       form.setValue('personality', false);
     }
-  }, [selectedProfile, effectPresets, form]);
+  }, [selectedProfile, effectPresets, form, isRvcProfile, watchedEngine]);
 
   // Auto-resize textarea based on content (only when expanded)
   useEffect(() => {
@@ -596,11 +577,15 @@ export function FloatingGenerateBox({
                           <SelectValue placeholder={t('generation.voiceSelector.placeholder')} />
                         </SelectTrigger>
                         <SelectContent side="top">
-                          {profiles?.map((profile) => (
-                            <SelectItem key={profile.id} value={profile.id} className="text-xs">
-                              {profile.name}
-                            </SelectItem>
-                          ))}
+                          {profiles
+                            ?.filter((profile) =>
+                              isProfileCompatibleWithEngine(profile, watchedEngine),
+                            )
+                            .map((profile) => (
+                              <SelectItem key={profile.id} value={profile.id} className="text-xs">
+                                {profile.name}
+                              </SelectItem>
+                            ))}
                         </SelectContent>
                       </Select>
                     </div>
@@ -658,16 +643,7 @@ export function FloatingGenerateBox({
                   />
 
                   <FormItem className="flex-1 space-y-0">
-                    {isRvcProfile ? (
-                      // The base engine is owned by the profile — not a
-                      // generation-time choice — so show it read-only.
-                      <div className="flex h-8 items-center gap-1.5 rounded-full border border-border bg-card px-3 text-xs text-muted-foreground">
-                        <Waves className="h-3.5 w-3.5 shrink-0 text-accent" />
-                        <span className="truncate">{t('generation.rvcBaseVoice')}</span>
-                      </div>
-                    ) : (
-                      <EngineModelSelector form={form} compact selectedProfile={selectedProfile} />
-                    )}
+                    <EngineModelSelector form={form} compact />
                   </FormItem>
 
                   <FormItem className="flex-1 space-y-0">

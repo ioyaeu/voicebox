@@ -52,6 +52,22 @@ def resolve_profile(
     return None
 
 
+def resolve_bound_engine(explicit_engine: str | None, binding_engine: str | None, profile) -> str | None:
+    """Resolve an agent engine without overriding profile-owned engines.
+
+    Preset profiles and RVC profiles carry their engine in the profile itself.
+    A binding default is useful for cloned/designed profiles, but applying it
+    to a selected preset or RVC profile creates an invalid voice/engine pair.
+    An explicit tool/request engine remains authoritative so the generation
+    route can return its normal validation error for an intentional conflict.
+    """
+    if explicit_engine is not None:
+        return explicit_engine
+    if getattr(profile, "voice_type", None) in {"preset", "rvc"}:
+        return None
+    return binding_engine
+
+
 def with_db() -> Session:
     """Utility for tool handlers that aren't managed by FastAPI's Depends."""
     return next(get_db())

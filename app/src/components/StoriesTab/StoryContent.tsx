@@ -67,6 +67,7 @@ export function StoryContent() {
     return historyData.items.filter(
       (gen) =>
         gen.status === 'completed' &&
+        Boolean(gen.audio_path) &&
         !storyGenerationIds.has(gen.id) &&
         (gen.text.toLowerCase().includes(query) || gen.profile_name.toLowerCase().includes(query)),
     );

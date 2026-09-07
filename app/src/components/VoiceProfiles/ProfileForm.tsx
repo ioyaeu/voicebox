@@ -304,9 +304,12 @@ export function ProfileForm() {
   const isSampleBasedProfile = isCreating
     ? voiceSource === 'clone'
     : editingProfile?.voice_type !== 'preset';
-  const availableDefaultEngines = DEFAULT_ENGINE_OPTIONS.filter(
-    (option) => !isSampleBasedProfile || !PRESET_ONLY_ENGINES.has(option.value),
-  );
+  const isRvcProfile = isCreating ? voiceSource === 'rvc' : editingProfile?.voice_type === 'rvc';
+  const availableDefaultEngines = isRvcProfile
+    ? [{ value: 'rvc', label: 'RVC' }]
+    : DEFAULT_ENGINE_OPTIONS.filter(
+        (option) => !isSampleBasedProfile || !PRESET_ONLY_ENGINES.has(option.value),
+      );
 
   // Show recording errors
   useEffect(() => {
@@ -409,13 +412,17 @@ export function ProfileForm() {
   }, [editingProfile, profileFormDraft, open, form]);
 
   useEffect(() => {
+    if (isRvcProfile) {
+      if (defaultEngine !== 'rvc') setDefaultEngine('rvc');
+      return;
+    }
     if (
       defaultEngine &&
       !availableDefaultEngines.some((option) => option.value === defaultEngine)
     ) {
       setDefaultEngine('');
     }
-  }, [availableDefaultEngines, defaultEngine]);
+  }, [availableDefaultEngines, defaultEngine, isRvcProfile]);
 
   useEffect(() => {
     if (!selectedPresetVoiceId) {
@@ -523,7 +530,7 @@ export function ProfileForm() {
             name: data.name,
             description: data.description,
             language: data.language,
-            default_engine: defaultEngine || undefined,
+            default_engine: isRvcProfile ? 'rvc' : defaultEngine || undefined,
             personality: data.personality?.trim() ? data.personality.trim() : undefined,
             // Chain settings are applied server-side only for rvc profiles.
             ...(editingProfile?.voice_type === 'rvc'
@@ -639,6 +646,7 @@ export function ProfileForm() {
           description: data.description,
           language: data.language,
           voice_type: 'rvc' as VoiceType,
+          default_engine: 'rvc',
           personality: data.personality?.trim() ? data.personality.trim() : undefined,
           rvc_base_voice: rvcBaseVoice,
           rvc_params: rvcParams,
@@ -777,7 +785,7 @@ export function ProfileForm() {
           name: data.name,
           description: data.description,
           language: data.language,
-          default_engine: defaultEngine || undefined,
+          default_engine: isRvcProfile ? 'rvc' : defaultEngine || undefined,
           personality: data.personality?.trim() ? data.personality.trim() : undefined,
         });
 
@@ -1411,12 +1419,14 @@ export function ProfileForm() {
                   <FormItem>
                     <FormLabel>{t('profileForm.fields.defaultEngine')}</FormLabel>
                     <Select
-                      value={defaultEngine || '_none'}
+                      value={isRvcProfile ? 'rvc' : defaultEngine || '_none'}
                       onValueChange={(v) => {
                         setDefaultEngine(v === '_none' ? '' : v);
                       }}
                       disabled={
-                        voiceSource === 'builtin' || editingProfile?.voice_type === 'preset'
+                        isRvcProfile ||
+                        voiceSource === 'builtin' ||
+                        editingProfile?.voice_type === 'preset'
                       }
                     >
                       <FormControl>

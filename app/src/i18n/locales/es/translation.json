@@ -1069,6 +1069,10 @@
         "neverConnected": "nunca conectado",
         "defaultOption": "(predeterminado)",
         "removeAria": "Quitar vinculación de {{client}}",
+        "plainText": "Texto plano",
+        "plainTextTitle": "Quitar el markdown (código, tablas, enlaces, énfasis) antes de hablar",
+        "maxCharsPlaceholder": "máx. caracteres",
+        "maxCharsTitle": "Limitar el texto hablado, cortado al final de una frase (mín. 50, vacío = sin límite)",
         "add": {
           "title": "Añadir una vinculación",
           "clientIdPlaceholder": "id de cliente (p. ej. claude-code)",

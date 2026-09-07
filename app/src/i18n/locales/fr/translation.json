@@ -646,6 +646,7 @@
   },
   "history": {
     "empty": "Encore aucune génération vocale…",
+    "audioUnavailable": "Audio indisponible",
     "actions": {
       "menu": "Actions",
       "play": "Lire",
@@ -761,7 +762,10 @@
     },
     "general": {
       "docs": { "title": "Lire la documentation" },
-      "discord": { "title": "Rejoindre le Discord", "subtitle": "Obtenez de l'aide et partagez des voix" },
+      "discord": {
+        "title": "Rejoindre le Discord",
+        "subtitle": "Obtenez de l'aide et partagez des voix"
+      },
       "serverUrl": {
         "title": "URL du serveur",
         "description": "L'adresse de votre serveur Voicebox.",
@@ -1064,6 +1068,10 @@
         "neverConnected": "jamais connecté",
         "defaultOption": "(par défaut)",
         "removeAria": "Supprimer la liaison pour {{client}}",
+        "plainText": "Texte brut",
+        "plainTextTitle": "Retirer le markdown (code, tableaux, liens, emphase) avant la lecture",
+        "maxCharsPlaceholder": "car. max",
+        "maxCharsTitle": "Plafonner le texte lu, coupé en fin de phrase (min 50, vide = sans plafond)",
         "add": {
           "title": "Ajouter une liaison",
           "clientIdPlaceholder": "identifiant client (ex. claude-code)",

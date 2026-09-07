@@ -108,7 +108,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from urllib.parse import quote
 
 from . import __version__, config, database
-from .services import tts, transcribe, llm
+from .services import history, tts, transcribe, llm
 from .database import get_db
 from .utils.platform_detect import get_backend_type
 from .utils.progress import get_progress_manager
@@ -341,6 +341,10 @@ async def _run_startup(application: FastAPI) -> None:
         )
         if result.rowcount > 0:
             logger.info("Marked %d stale generation(s) as failed", result.rowcount)
+
+        expired_ephemeral = history.delete_expired_ephemeral_generations(db)
+        if expired_ephemeral:
+            logger.info("Cleaned up %d expired temporary speech generation(s)", expired_ephemeral)
 
         from .database import VoiceProfile as DBVoiceProfile, Generation as DBGeneration
 

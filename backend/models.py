@@ -137,6 +137,10 @@ class GenerationRequest(BaseModel):
         default=50, ge=0, le=500, description="Crossfade duration in ms between chunks (0 for hard cut)"
     )
     normalize: bool = Field(default=True, description="Normalize output audio volume")
+    keep_audio: bool = Field(
+        default=True,
+        description="Keep the generated audio in History. Agent-facing speak endpoints override this to false by default.",
+    )
     effects_chain: Optional[List["EffectConfig"]] = Field(
         None, description="Effects chain to apply after generation (overrides profile default)"
     )
@@ -158,6 +162,7 @@ class GenerationResponse(BaseModel):
     status: str = "completed"
     error: Optional[str] = None
     is_favorited: bool = False
+    keep_audio: bool = True
     source: str = "manual"
     created_at: datetime
     versions: Optional[List["GenerationVersionResponse"]] = None
@@ -193,6 +198,7 @@ class HistoryResponse(BaseModel):
     status: str = "completed"
     error: Optional[str] = None
     is_favorited: bool = False
+    keep_audio: bool = True
     created_at: datetime
     versions: Optional[List["GenerationVersionResponse"]] = None
     active_version_id: Optional[str] = None
@@ -359,9 +365,11 @@ class MCPClientBindingResponse(BaseModel):
     profile_id: Optional[str] = None
     default_engine: Optional[str] = Field(
         None,
-        pattern="^(qwen|qwen_custom_voice|luxtts|chatterbox|chatterbox_turbo|tada|kokoro|voxtral)$",
+        pattern="^(qwen|qwen_custom_voice|luxtts|chatterbox|chatterbox_turbo|tada|kokoro|voxtral|rvc)$",
     )
     default_personality: bool = False
+    default_plain_text: bool = False
+    default_max_chars: Optional[int] = Field(None, ge=50, le=10000)
     last_seen_at: Optional[datetime] = None
     created_at: datetime
     updated_at: datetime
@@ -378,9 +386,11 @@ class MCPClientBindingUpsert(BaseModel):
     profile_id: Optional[str] = None
     default_engine: Optional[str] = Field(
         None,
-        pattern="^(qwen|qwen_custom_voice|luxtts|chatterbox|chatterbox_turbo|tada|kokoro|voxtral)$",
+        pattern="^(qwen|qwen_custom_voice|luxtts|chatterbox|chatterbox_turbo|tada|kokoro|voxtral|rvc)$",
     )
     default_personality: bool = False
+    default_plain_text: bool = False
+    default_max_chars: Optional[int] = Field(None, ge=50, le=10000)
 
 
 class MCPClientBindingListResponse(BaseModel):
@@ -397,7 +407,7 @@ class SpeakRequest(BaseModel):
     )
     engine: Optional[str] = Field(
         None,
-        pattern="^(qwen|qwen_custom_voice|luxtts|chatterbox|chatterbox_turbo|tada|kokoro|voxtral)$",
+        pattern="^(qwen|qwen_custom_voice|luxtts|chatterbox|chatterbox_turbo|tada|kokoro|voxtral|rvc)$",
     )
     personality: Optional[bool] = Field(
         None,
@@ -406,6 +416,20 @@ class SpeakRequest(BaseModel):
     language: Optional[str] = Field(
         None,
         pattern="^(zh|en|ja|ko|de|fr|ru|pt|es|it|he|ar|da|el|fi|hi|ms|nl|no|pl|sv|sw|tr)$",
+    )
+    plain_text: Optional[bool] = Field(
+        None,
+        description="Strip markdown (code fences, tables, links, emphasis) before TTS. When null, the per-client binding's default_plain_text flag decides.",
+    )
+    max_chars: Optional[int] = Field(
+        None,
+        ge=50,
+        le=10000,
+        description="Cap the spoken text at this many characters, cut on a sentence boundary. When null, the per-client binding's default_max_chars decides; unset means no cap.",
+    )
+    keep_audio: bool = Field(
+        default=False,
+        description="Keep the generated audio in History. Defaults to temporary agent speech; set true when the user asks to keep or save the audio.",
     )
 
 
