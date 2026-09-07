@@ -30,7 +30,10 @@ def build_mcp_server() -> FastMCP:
             "Voicebox is a local voice I/O layer. Use `voicebox.speak` to "
             "play text in a voice profile, `voicebox.transcribe` for "
             "audio→text, and the `list_*` tools to discover profiles and "
-            "captures."
+            "captures. For incremental spoken prose, use speech_start, numbered "
+            "speech_append calls, then speech_finish; inspect speech_status or "
+            "speech_cancel as needed. Do not also speak the same answer. "
+            "Set keep_audio=true only when asked to preserve audio."
         ),
     )
     register_tools(mcp)

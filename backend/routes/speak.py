@@ -86,9 +86,12 @@ async def speak(
             detail="Nothing left to speak once markup was stripped — the text was only code, tables or links.",
         )
 
-    from .generations import generate_speech
+    from .generations import submit_speech
+    from ..services.speech_sessions import sessions
 
-    generation = await generate_speech(
+    sessions.require_idle()
+
+    generation = await submit_speech(
         models.GenerationRequest(
             profile_id=profile.id,
             text=spoken,
@@ -98,6 +101,7 @@ async def speak(
             keep_audio=data.keep_audio,
         ),
         db,
+        source="rest",
     )
 
     mcp_events.publish(

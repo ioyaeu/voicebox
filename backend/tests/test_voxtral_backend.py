@@ -3,6 +3,7 @@ from backend.backends.voxtral_backend import (
     VOXTRAL_HF_REPO,
     VOXTRAL_VOICE_IDS,
     VOXTRAL_VOICES,
+    VoxtralTTSBackend,
 )
 from backend.models import GenerationRequest, MCPClientBindingUpsert, SpeakRequest
 from backend.services.profiles import _get_preset_voice_ids, _preset_voice_language
@@ -23,6 +24,12 @@ def test_voxtral_preset_voice_table_is_exposed_to_profile_validation():
     assert _get_preset_voice_ids("voxtral") == VOXTRAL_VOICE_IDS
     assert _preset_voice_language("voxtral", "fr_female") == "fr"
     assert _preset_voice_language("voxtral", "hi_male") == "hi"
+
+
+def test_voxtral_matches_loudness_across_long_form_chunks():
+    assert VoxtralTTSBackend.match_chunk_loudness is True
+    assert VoxtralTTSBackend.stabilize_chunk_loudness is True
+    assert VoxtralTTSBackend.preserve_seed_across_chunks is True
 
 
 def test_voxtral_is_accepted_by_public_engine_validators():

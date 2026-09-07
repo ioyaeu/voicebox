@@ -91,6 +91,11 @@ async def generate_speech(
     db: Session = Depends(get_db),
 ):
     """Generate speech from text using a voice profile."""
+    return await submit_speech(data, db)
+
+
+async def submit_speech(data: models.GenerationRequest, db: Session, *, source: str = "manual"):
+    """Shared submission path; source is server-owned, never a public input."""
     task_manager = get_task_manager()
     generation_id = str(uuid.uuid4())
 
@@ -110,7 +115,6 @@ async def generate_speech(
     model_size = resolve_model_size_for_engine(engine, data.model_size, data.language)
 
     text = data.text
-    source = "manual"
     if data.personality and getattr(profile, "personality", None):
         try:
             llm_result = await personality.rewrite_as_profile(profile.personality, data.text)
@@ -119,7 +123,8 @@ async def generate_speech(
         text = llm_result.text.strip()
         if not text:
             raise HTTPException(status_code=500, detail="LLM produced empty output; nothing to speak.")
-        source = "personality_speak"
+        if source == "manual":
+            source = "personality_speak"
 
     generation = await history.create_generation(
         profile_id=data.profile_id,

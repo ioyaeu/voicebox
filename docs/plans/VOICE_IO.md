@@ -78,11 +78,18 @@ first-run Accessibility prompt UI with deep-link to System Settings,
 direct-injection path for focus-was-inside-Voicebox (step 6 — dictating
 into our own Generate tab currently falls back to the capture list).
 
+### Agent Output Update (September 2026)
+
+Phase 5 now has `/speak`, `voicebox.speak`, per-agent bindings and profile
+personality metadata. [MCP_SERVER](MCP_SERVER.md) records that implementation.
+[Incremental speech sessions](MCP_SPEECH_STREAMING.md) extend it with bounded
+text input, ordered playback and acknowledgements. Agent output is temporary
+by default, unlike archived captures; explicit keep-audio preserves it.
+Native progressive audio and automatic host text-event adapters remain next
+steps, not completed features.
+
 ### Not started
 
-- **Phase 5 — Agent voice output + persona loop.** No `/speak` endpoint, no
-  `voicebox.speak` MCP tool, no per-agent voice binding, no persona metadata
-  on profiles.
 - **Phase 6 — STT engine expansion.** Only Whisper (`mlx_backend.py`).
   Parakeet v3, Qwen3-ASR, Kyutai — all unregistered.
 - **Phase 8 — Pipeline routing, sinks, long-form.** No preset primitive, no

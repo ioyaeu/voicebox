@@ -274,6 +274,73 @@ def match_chunk_loudness(
     return matched
 
 
+def stabilize_chunk_loudness(
+    audio: np.ndarray,
+    sample_rate: int,
+    *,
+    max_gain_db: float = 6.0,
+    gate_db: float = -36.0,
+    window_ms: int = 250,
+    hop_ms: int = 50,
+    smoothing_ms: int = 400,
+) -> np.ndarray:
+    """Reduce slow loudness fades inside a generated TTS chunk."""
+    samples = np.asarray(audio, dtype=np.float32).reshape(-1)
+    if samples.size == 0:
+        return samples
+
+    frame_size = max(1, int(sample_rate * window_ms / 1000))
+    hop_size = max(1, int(sample_rate * hop_ms / 1000))
+    if samples.size < frame_size * 2:
+        return samples
+
+    starts = np.arange(0, samples.size - frame_size + 1, hop_size)
+    rms = np.array(
+        [
+            np.sqrt(np.mean(np.square(samples[start : start + frame_size], dtype=np.float64)))
+            for start in starts
+        ],
+        dtype=np.float64,
+    )
+    if rms.size < 3:
+        return samples
+
+    active_floor = 10 ** (gate_db / 20)
+    # Use an absolute speech gate here. A percentile-relative gate would
+    # misclassify the quiet tail of a genuine fade as silence, making the
+    # very problem this stage is meant to correct invisible to the gain map.
+    active = rms >= active_floor
+    if int(np.count_nonzero(active)) < 3:
+        return samples
+
+    target = float(np.median(rms[active]))
+    max_gain = 10 ** (max_gain_db / 20)
+    gains = np.ones_like(rms)
+    gains[active] = np.clip(target / np.maximum(rms[active], MIN_ACTIVE_RMS), 1 / max_gain, max_gain)
+
+    smooth_frames = max(1, int(smoothing_ms / hop_ms))
+    if smooth_frames > 1:
+        kernel = np.ones(smooth_frames, dtype=np.float64) / smooth_frames
+        pad_left = smooth_frames // 2
+        pad_right = smooth_frames - 1 - pad_left
+        padded = np.pad(gains, (pad_left, pad_right), mode="edge")
+        gains = np.convolve(padded, kernel, mode="valid")
+
+    centers = starts + frame_size // 2
+    sample_gains = np.interp(
+        np.arange(samples.size),
+        centers,
+        gains,
+        left=float(gains[0]),
+        right=float(gains[-1]),
+    )
+    stabilized = samples * sample_gains.astype(np.float32)
+    peak = float(np.max(np.abs(stabilized))) if stabilized.size else 0.0
+    if peak > 0.98:
+        stabilized *= 0.98 / peak
+    return stabilized.astype(np.float32)
+
+
 def _runaway_detector_flags(runaway_detector, audio: np.ndarray, sample_rate: int, text: str) -> bool:
     """Call new text-aware detectors while keeping two-argument detectors usable."""
     try:
@@ -391,6 +458,15 @@ async def generate_chunked(
 
         if trim_fn is not None:
             chunk_audio = trim_fn(chunk_audio, chunk_sr)
+        if bool(getattr(backend, "stabilize_chunk_loudness", False)):
+            max_gain_db = float(
+                getattr(backend, "chunk_loudness_max_gain_db", DEFAULT_CHUNK_LOUDNESS_MAX_GAIN_DB)
+            )
+            chunk_audio = stabilize_chunk_loudness(
+                chunk_audio,
+                chunk_sr,
+                max_gain_db=max_gain_db,
+            )
         return np.asarray(chunk_audio, dtype=np.float32), chunk_sr
 
     backend_max_chunk_chars = getattr(backend, "max_chunk_chars", None)

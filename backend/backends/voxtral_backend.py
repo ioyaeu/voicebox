@@ -59,6 +59,14 @@ VOXTRAL_VOICE_IDS = {voice_id for voice_id, _name, _gender, _lang in VOXTRAL_VOI
 class VoxtralTTSBackend:
     """Voxtral-4B TTS backend for Apple Silicon MLX."""
 
+    # Long agent answers are split at sentence boundaries. Voxtral's preset
+    # generations can come back with noticeably different loudness per chunk;
+    # match them before concatenation so the final global normalization does
+    # not push a later chunk toward clipping.
+    match_chunk_loudness = True
+    stabilize_chunk_loudness = True
+    chunk_loudness_max_gain_db = 6.0
+
     preserve_seed_across_chunks = True
 
     def __init__(self):

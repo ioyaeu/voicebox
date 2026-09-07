@@ -1,5 +1,5 @@
 import { motion } from 'framer-motion';
-import { AlertCircle } from 'lucide-react';
+import { AlertCircle, Pause, Play, Square } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { cn } from '@/lib/utils/cn';
 
@@ -24,9 +24,7 @@ const PILL_LABEL_KEYS: Record<Exclude<PillState, 'rest' | 'error'>, string> = {
   completed: 'captures.pill.completed',
 };
 
-function barModeFor(
-  state: Exclude<PillState, 'error'>,
-): 'generating' | 'playing' | 'idle' {
+function barModeFor(state: Exclude<PillState, 'error'>): 'generating' | 'playing' | 'idle' {
   if (state === 'recording' || state === 'speaking') return 'playing';
   if (state === 'completed' || state === 'rest') return 'idle';
   return 'generating';
@@ -77,6 +75,8 @@ export function CapturePill({
   state,
   elapsedMs,
   onStop,
+  onPause,
+  paused = false,
   errorMessage,
   onDismiss,
   className,
@@ -84,6 +84,8 @@ export function CapturePill({
   state: PillState;
   elapsedMs: number;
   onStop?: () => void;
+  onPause?: () => void;
+  paused?: boolean;
   errorMessage?: string | null;
   onDismiss?: () => void;
   className?: string;
@@ -102,7 +104,7 @@ export function CapturePill({
 
   const visible = state !== 'rest';
   const labelText = t(state === 'rest' ? PILL_LABEL_KEYS.recording : PILL_LABEL_KEYS[state]);
-  const barMode = barModeFor(state);
+  const barMode = paused ? 'idle' : barModeFor(state);
 
   const dot = (
     <span className="relative flex h-2 w-2 shrink-0">
@@ -113,24 +115,25 @@ export function CapturePill({
     </span>
   );
 
-  const stopButton = onStop && state === 'recording' ? (
-    <button
-      type="button"
-      onClick={onStop}
-      aria-label={t('captures.pill.stopAria')}
-      className="relative flex h-2 w-2 shrink-0 items-center justify-center rounded-full focus:outline-none focus:ring-2 focus:ring-accent/50"
-    >
-      {dot}
-    </button>
-  ) : dot;
+  const stopButton =
+    onStop && state === 'recording' ? (
+      <button
+        type="button"
+        onClick={onStop}
+        aria-label={t('captures.pill.stopAria')}
+        className="relative flex h-2 w-2 shrink-0 items-center justify-center rounded-full focus:outline-none focus:ring-2 focus:ring-accent/50"
+      >
+        {dot}
+      </button>
+    ) : (
+      dot
+    );
 
   // Completed gets an inset accent stroke (via box-shadow, not Tailwind's
   // ring — ring utility doesn't compose with arbitrary shadow-[…]) to mark
   // the success moment without changing the pill's dimensions.
   const completedStroke =
-    state === 'completed'
-      ? 'shadow-[inset_0_0_0_2px_hsl(var(--accent)/0.6)]'
-      : null;
+    state === 'completed' ? 'shadow-[inset_0_0_0_2px_hsl(var(--accent)/0.6)]' : null;
 
   return (
     <div
@@ -145,6 +148,28 @@ export function CapturePill({
       )}
     >
       {stopButton}
+      {state === 'speaking' && onPause && (
+        <button
+          type="button"
+          onClick={onPause}
+          title={paused ? t('common.play', 'Play') : t('common.pause', 'Pause')}
+          aria-label={paused ? t('common.play', 'Play') : t('common.pause', 'Pause')}
+          className="flex h-6 w-6 shrink-0 items-center justify-center"
+        >
+          {paused ? <Play className="h-4 w-4" /> : <Pause className="h-4 w-4" />}
+        </button>
+      )}
+      {state === 'speaking' && onStop && (
+        <button
+          type="button"
+          onClick={onStop}
+          title={t('common.stop', 'Stop')}
+          aria-label={t('common.stop', 'Stop')}
+          className="flex h-6 w-6 shrink-0 items-center justify-center"
+        >
+          <Square className="h-3 w-3" />
+        </button>
+      )}
       <span className="text-sm font-medium shrink-0" style={{ minWidth: '104px' }}>
         {labelText}
       </span>
@@ -195,4 +220,3 @@ function ErrorPill({
     </button>
   );
 }
-

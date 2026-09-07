@@ -1,7 +1,7 @@
 import numpy as np
 import pytest
 
-from backend.utils.chunked_tts import generate_chunked
+from backend.utils.chunked_tts import generate_chunked, stabilize_chunk_loudness
 
 
 class _SeedRecordingBackend:
@@ -105,3 +105,16 @@ async def test_generate_chunked_matches_active_speech_loudness_when_backend_requ
 
     speech_rms = [float(np.sqrt(np.mean(audio[start + 10 : start + 90] ** 2))) for start in (0, 100, 200)]
     assert speech_rms == pytest.approx([0.1, 0.1, 0.1], abs=0.003)
+
+
+def test_stabilize_chunk_loudness_reduces_slow_fade():
+    sample_rate = 1000
+    t = np.arange(sample_rate * 4, dtype=np.float32) / sample_rate
+    envelope = np.linspace(0.22, 0.055, t.size, dtype=np.float32)
+    audio = envelope * np.sin(2 * np.pi * 8 * t)
+
+    stabilized = stabilize_chunk_loudness(audio, sample_rate, max_gain_db=9.0)
+    first_rms = float(np.sqrt(np.mean(stabilized[:sample_rate] ** 2)))
+    last_rms = float(np.sqrt(np.mean(stabilized[-sample_rate:] ** 2)))
+
+    assert last_rms >= first_rms * 0.7

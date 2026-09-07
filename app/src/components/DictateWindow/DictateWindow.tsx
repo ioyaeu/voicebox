@@ -5,6 +5,7 @@ import { CapturePill } from '@/components/CapturePill/CapturePill';
 import { apiClient } from '@/lib/api/client';
 import type { FocusSnapshot } from '@/lib/api/types';
 import { useCaptureRecordingSession } from '@/lib/hooks/useCaptureRecordingSession';
+import { useSpeechSession } from '@/lib/hooks/useSpeechSession';
 
 /**
  * Floating dictate surface shown in a separate transparent Tauri window.
@@ -147,14 +148,23 @@ export function DictateWindow() {
     statusSourceRef.current = null;
     clearStatusTimeout();
     if (audioRef.current) {
+      audioRef.current.onended = null;
+      audioRef.current.onerror = null;
+      audioRef.current.onplaying = null;
       audioRef.current.pause();
       audioRef.current.src = '';
       audioRef.current = null;
     }
     setSpeaking(null);
+    speakingRef.current = null;
   };
 
+  const speechSession = useSpeechSession(() => dismissSpeak());
+  const streamActiveRef = useRef(false);
+  streamActiveRef.current = speechSession.active;
+
   const startSpeakPlayback = (generationId: string, keepAudio: boolean) => {
+    if (speakingRef.current?.generationId !== generationId || audioRef.current) return;
     const audio = new Audio(apiClient.getAudioUrl(generationId));
     audio.onended = () => {
       dismissSpeak(generationId);
@@ -191,6 +201,7 @@ export function DictateWindow() {
     // {generation_id, profile_name, source, client_id}.
     unlistens.push(
       listen<string>('dictate:speak-start', (event) => {
+        if (streamActiveRef.current) return;
         let parsed: { generation_id?: string } = {};
         try {
           parsed = typeof event.payload === 'string' ? JSON.parse(event.payload) : {};
@@ -203,7 +214,8 @@ export function DictateWindow() {
         // Tear down any previous cycle — last speak wins.
         dismissSpeak();
 
-        setSpeaking({ generationId: id, keepAudio: false, startedAt: null });
+        speakingRef.current = { generationId: id, keepAudio: false, startedAt: null };
+        setSpeaking(speakingRef.current);
         setSpeakElapsed(0);
 
         // Subscribe to this one generation's status. When it completes, the
@@ -299,8 +311,16 @@ export function DictateWindow() {
   // --- Effective pill state -----------------------------------------------
 
   const isSpeaking = Boolean(speaking);
-  const effectiveState = isSpeaking ? 'speaking' : session.pillState;
-  const effectiveElapsed = isSpeaking ? speakElapsed : session.pillElapsedMs;
+  const effectiveState = speechSession.error
+    ? 'error'
+    : speechSession.active || isSpeaking
+      ? 'speaking'
+      : session.pillState;
+  const effectiveElapsed = speechSession.active
+    ? speechSession.elapsedMs
+    : isSpeaking
+      ? speakElapsed
+      : session.pillElapsedMs;
 
   // When the pill cycle ends (no capture AND no speak), tell Rust to tuck
   // the window away. Rust owns the hide + park-off-screen + click-through
@@ -321,9 +341,17 @@ export function DictateWindow() {
         <CapturePill
           state={effectiveState}
           elapsedMs={effectiveElapsed}
-          errorMessage={session.errorMessage}
-          onDismiss={session.dismissError}
-          onStop={session.isRecording ? session.stopRecording : undefined}
+          errorMessage={speechSession.error ?? session.errorMessage}
+          onDismiss={speechSession.error ? speechSession.dismissError : session.dismissError}
+          onStop={
+            speechSession.active
+              ? speechSession.stop
+              : session.isRecording
+                ? session.stopRecording
+                : undefined
+          }
+          onPause={speechSession.active ? speechSession.togglePause : undefined}
+          paused={speechSession.paused}
         />
       ) : null}
     </div>

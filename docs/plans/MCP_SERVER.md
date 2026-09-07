@@ -5,6 +5,12 @@
 
 ## Status
 
+September 2026 extension: [incremental speech sessions](MCP_SPEECH_STREAMING.md)
+add five tools alongside `speak`, sharing the generation queue and a single
+acknowledging desktop renderer. The sections below retain the original v1
+implementation record; the linked document describes the new protocol,
+limits, validation gates and native-streaming follow-up.
+
 ### Shipped (backend)
 - **`fastmcp` + `sse-starlette`** pinned in `backend/requirements.txt`.
 - **`backend/mcp_server/`** package with `server.py`, `tools.py`, `context.py`, `resolve.py`, `events.py`, `README.md`. Named `mcp_server` (not `mcp`) to sidestep a shadowing conflict with the installed `mcp` PyPI package that FastMCP imports internally.
@@ -59,7 +65,7 @@
 - **One-click install buttons** — write/merge into `~/.claude/settings.json`, `~/.cursor/mcp.json`, etc. via a Tauri command. Copy-paste works today; this is pure ergonomics.
 - **`.mcpb` desktop extension** for Claude Desktop (single file, double-click to install). Claude Desktop-only, so lower priority than the agent-harness crowd.
 - **Refactor the hotkey_monitor.rs show-logic** to call `show_dictate_window()` instead of duplicating the position+show block. Skipped at ship to avoid regressing the well-tested chord path.
-- **Source attribution on `Generation.source`** — currently `"manual" | "personality_speak"`; adding `"mcp"` / `"rest"` would let the Captures tab filter by MCP-originated rows.
+- **Source attribution** is now implemented as `mcp`, `rest`, and `speech_stream`; the main player skips their autoplay because the pill owns agent playback.
 
 ## Context
 
