@@ -174,6 +174,10 @@ fn dispatch(app: &AppHandle, event: &str, data: &str) {
         "speak-end" => {
             let _ = app.emit("dictate:speak-end", data.to_string());
         }
+        "speech-session" => {
+            ensure_dictate_window(app);
+            let _ = app.emit("dictate:speech-session", data.to_string());
+        }
         // `ready` and `ping` are heartbeats; ignore.
         _ => {}
     }

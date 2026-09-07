@@ -1,5 +1,6 @@
 import type { LanguageCode } from '@/lib/constants/languages';
 import { useServerStore } from '@/stores/serverStore';
+import type { PlaybackUpdate, SpeechSnapshot } from '@/lib/audio/speechSessionPlayer';
 import type {
   ActiveTasksResponse,
   ApplyEffectsRequest,
@@ -78,6 +79,15 @@ function formatErrorDetail(detail: unknown, fallback: string): string {
 }
 
 class ApiClient {
+  async speechPlayback(sessionId: string, update: PlaybackUpdate): Promise<SpeechSnapshot> {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 10_000);
+    try {
+      return await this.request(`/speak/sessions/${encodeURIComponent(sessionId)}/playback`, {
+        method: 'POST', body: JSON.stringify(update), signal: controller.signal,
+      });
+    } finally { clearTimeout(timeout); }
+  }
   private getBaseUrl(): string {
     const serverUrl = useServerStore.getState().serverUrl;
     return serverUrl;

@@ -342,6 +342,9 @@ async def _run_startup(application: FastAPI) -> None:
         if result.rowcount > 0:
             logger.info("Marked %d stale generation(s) as failed", result.rowcount)
 
+        from .services.speech_sessions import cleanup_interrupted_sessions
+
+        await cleanup_interrupted_sessions(db)
         expired_ephemeral = history.delete_expired_ephemeral_generations(db)
         if expired_ephemeral:
             logger.info("Cleaned up %d expired temporary speech generation(s)", expired_ephemeral)
@@ -398,6 +401,11 @@ async def _run_startup(application: FastAPI) -> None:
 async def _run_shutdown() -> None:
     """Unload models on lifespan exit."""
     logger.info("Voicebox server shutting down...")
+    from .services.speech_sessions import sessions
+
+    if not await sessions.shutdown():
+        logger.warning("Speech inference still draining; leaving model teardown to process exit")
+        return
     try:
         await tts.unload_tts_model()
     except Exception:

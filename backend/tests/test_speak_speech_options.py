@@ -62,7 +62,7 @@ def db(tmp_path, monkeypatch):
 
 @pytest.fixture
 def captured_generation(monkeypatch):
-    """Stub the model-backed generate_speech; both surfaces import it lazily from routes.generations."""
+    """Stub the model-backed submit_speech shared by the two agent surfaces."""
     captured = {}
 
     class _FakeGeneration:
@@ -71,11 +71,12 @@ def captured_generation(monkeypatch):
         def model_dump(self, mode="json"):
             return {"id": self.id, "status": "generating"}
 
-    async def fake_generate_speech(req, db):
+    async def fake_generate_speech(req, db, *, source):
         captured["req"] = req
+        captured["source"] = source
         return _FakeGeneration()
 
-    monkeypatch.setattr(generations, "generate_speech", fake_generate_speech)
+    monkeypatch.setattr(generations, "submit_speech", fake_generate_speech)
     return captured
 
 
@@ -116,6 +117,7 @@ async def test_rest_applies_binding_defaults(db, captured_generation):
     await speak(models.SpeakRequest(text=MARKDOWN), _rest_request(), db)
     spoken = captured_generation["req"].text
     assert captured_generation["req"].keep_audio is False
+    assert captured_generation["source"] == "rest"
     assert "rm -rf" not in spoken
     assert "|" not in spoken
     assert "**" not in spoken

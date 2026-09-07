@@ -17,7 +17,7 @@ interface GenerationStatusEvent {
 
 // Agent-initiated generations are played by the floating pill, not the
 // main-window AudioPlayer. Skip autoplay here to avoid double-playback.
-const AGENT_SOURCES = new Set(['mcp', 'rest']);
+const AGENT_SOURCES = new Set(['mcp', 'rest', 'speech_stream']);
 
 /**
  * Subscribes to SSE for all pending generations. When a generation completes,

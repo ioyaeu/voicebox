@@ -50,6 +50,11 @@ claude mcp add voicebox \
 | Name | Purpose |
 |---|---|
 | `voicebox.speak`          | Speak text in a voice profile. Returns a generation id you can poll. |
+| `voicebox.speech_start`   | Start incremental spoken text; resolve the bound voice once. |
+| `voicebox.speech_append`  | Append numbered, retry-safe prose deltas with bounded input credit. |
+| `voicebox.speech_finish`  | Flush final text; playback may still be draining. |
+| `voicebox.speech_status`  | Read playback state and available input credit. |
+| `voicebox.speech_cancel`  | Stop playback and discard pending text. |
 | `voicebox.transcribe`     | Whisper transcription of a base64 blob or an absolute local path. |
 | `voicebox.list_captures`  | Recent captures (dictation / recording / file) with transcripts. |
 | `voicebox.list_profiles`  | Available voice profiles (cloned + preset). |
@@ -62,6 +67,13 @@ All tools resolve voice profiles in this precedence:
 
 Bindings are managed via `GET|PUT /mcp/bindings` or in the app under
 Settings → MCP.
+
+For incremental speech, see the [session protocol and daily-use adapter](../../docs/plans/MCP_SPEECH_STREAMING.md).
+The desktop app plays ordered WAV phrases, with pause/stop and cleanup after
+playback. `keep_audio=true` preserves the generated phrases in History.
+MCP does not automatically subscribe to IDE tokens: use successive tool calls
+or forward public text deltas with `scripts/speech_stream.py`. Do not also use
+`speak` or a Stop hook to read the same answer.
 
 ## Debug with MCP Inspector
 

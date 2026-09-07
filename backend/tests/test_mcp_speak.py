@@ -23,19 +23,20 @@ class _FakeGeneration:
 
 @pytest.fixture
 def captured_request(monkeypatch):
-    """Replace the real (torch-backed) generate_speech with a capturing stub.
+    """Replace the model-backed submit_speech with a capturing stub.
 
-    ``_speak`` imports ``generate_speech`` lazily from ``routes.generations``,
+    ``_speak`` imports ``submit_speech`` lazily from ``routes.generations``,
     so patching the attribute on that module intercepts the call and lets us
     inspect the ``GenerationRequest`` it would have run.
     """
     captured = {}
 
-    async def fake_generate_speech(req, db):
+    async def fake_generate_speech(req, db, *, source):
         captured["req"] = req
+        captured["source"] = source
         return _FakeGeneration()
 
-    monkeypatch.setattr(generations, "generate_speech", fake_generate_speech)
+    monkeypatch.setattr(generations, "submit_speech", fake_generate_speech)
     # Isolate the unit from the MCP event bus — _speak_response fires a
     # speak-start event we don't care about here.
     monkeypatch.setattr(tools.mcp_events, "publish", lambda *a, **k: None)
@@ -55,6 +56,7 @@ async def test_speak_forwards_explicit_model_size(captured_request):
         db=None,
     )
     assert captured_request["req"].model_size == "0.6B"
+    assert captured_request["source"] == "mcp"
 
 
 @pytest.mark.asyncio

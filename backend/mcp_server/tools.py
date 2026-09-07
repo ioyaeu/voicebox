@@ -33,6 +33,49 @@ MAX_TRANSCRIBE_BYTES = 200 * 1024 * 1024  # 200 MB
 
 def register_tools(mcp: FastMCP) -> None:
     """Attach all Voicebox tools to the given FastMCP instance."""
+    from ..services.speech_sessions import sessions, start_session
+
+    @mcp.tool(name="voicebox.speech_start", description=(
+        "Start incremental spoken prose in the bound voice. Returns session_id. "
+        "Append numbered text deltas, then finish. Do not also call speak for the "
+        "same answer. One active session; keep_audio=true preserves segment WAVs. "
+        "The desktop app must be running to play audio. No automatic IDE token subscription."
+    ))
+    async def speech_start(profile: str | None = None, language: str | None = None,
+                           keep_audio: bool = False) -> dict:
+        return await start_session(profile, language, keep_audio)
+
+    def owned(session_id):
+        return sessions.get(session_id, current_client_id.get())
+
+    @mcp.tool(name="voicebox.speech_append", description=(
+        "Append spoken prose (not Markdown) to a session. Sequence starts at 0. "
+        "Retries must use identical sequence and text. On buffer-full, wait for "
+        "playback and retry without incrementing sequence. Preserve spaces between deltas."
+    ))
+    async def speech_append(session_id: str, sequence: int, text: str) -> dict:
+        return sessions.append(owned(session_id), sequence, text)
+
+    @mcp.tool(name="voicebox.speech_finish", description=(
+        "Close the text input and flush its last phrase. Returns immediately; "
+        "draining means speech remains to be heard. Poll speech_status for completed."
+    ))
+    async def speech_finish(session_id: str) -> dict:
+        return sessions.finish(owned(session_id))
+
+    @mcp.tool(name="voicebox.speech_status", description=(
+        "Read input credit, next sequence and playback state. Completed means the "
+        "renderer acknowledged every segment, not just that TTS finished."
+    ))
+    async def speech_status(session_id: str) -> dict:
+        return sessions.snapshot(owned(session_id))
+
+    @mcp.tool(name="voicebox.speech_cancel", description=(
+        "Stop a speech session and discard unspoken text. In-flight inference "
+        "drains safely; temporary audio is cleaned, kept audio is preserved."
+    ))
+    async def speech_cancel(session_id: str) -> dict:
+        return sessions.cancel(owned(session_id))
 
     @mcp.tool(
         name="voicebox.speak",
@@ -283,7 +326,10 @@ async def _speak(
 ) -> dict[str, Any]:
     """Delegate to POST /generate — the route handles personality-rewrite
     internally when ``personality=true`` and the profile has a prompt."""
-    from ..routes.generations import generate_speech
+    from ..routes.generations import submit_speech
+    from ..services.speech_sessions import sessions
+
+    sessions.require_idle()
 
     # model_size=None is intentional: generate_speech normalizes it to the
     # engine default (see routes/generations.py), so an omitted size behaves
@@ -297,7 +343,7 @@ async def _speak(
         model_size=model_size,
         keep_audio=keep_audio,
     )
-    generation = await generate_speech(req, db)
+    generation = await submit_speech(req, db, source="mcp")
     return _speak_response(generation, profile_name, source="mcp")
 
 

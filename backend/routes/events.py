@@ -29,6 +29,11 @@ async def speak_events(request: Request):
         try:
             # Immediate hello so EventSource knows the connection is live.
             yield {"event": "ready", "data": "{}"}
+            from ..services.speech_sessions import sessions
+
+            active = sessions.active()
+            if active:
+                yield {"event": "speech-session", "data": json.dumps({"session_id": active.id, "state": active.state})}
             while True:
                 if await request.is_disconnected():
                     return
@@ -37,6 +42,9 @@ async def speak_events(request: Request):
                 except TimeoutError:
                     # Heartbeat so proxies don't reap idle streams.
                     yield {"event": "ping", "data": "{}"}
+                    active = sessions.active()
+                    if active:
+                        yield {"event": "speech-session", "data": json.dumps({"session_id": active.id, "state": active.state})}
                     continue
                 kind = event.pop("kind", "message")
                 yield {"event": kind, "data": json.dumps(event)}
