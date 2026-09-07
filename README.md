@@ -67,12 +67,12 @@
 
 ## What is Voicebox?
 
-Voicebox is a **local-first AI voice studio** — a free and open-source alternative to **ElevenLabs** and **WisprFlow** in one app. Clone voices from a few seconds of audio, generate speech in 23 languages across 7 TTS engines, dictate into any text field with a global hotkey, and give any MCP-aware AI agent a voice of your choosing.
+Voicebox is a **local-first AI voice studio** — a free and open-source alternative to **ElevenLabs** and **WisprFlow** in one app. Clone voices from a few seconds of audio, generate speech in 23 languages across 8 TTS engines, dictate into any text field with a global hotkey, and give any MCP-aware AI agent a voice of your choosing.
 
 The two cloud incumbents sit on opposite halves of the voice I/O loop — ElevenLabs on output, WisprFlow on input. Voicebox does both, bridges them with a bundled local LLM for refinement and per-profile personas, and runs the whole thing on your machine.
 
 - **Complete privacy** — models, voice data, and captures never leave your machine
-- **7 TTS engines** — Qwen3-TTS, Qwen CustomVoice, LuxTTS, Chatterbox Multilingual, Chatterbox Turbo, HumeAI TADA, and Kokoro
+- **8 TTS engines** — Qwen3-TTS, Qwen CustomVoice, LuxTTS, Chatterbox Multilingual, Chatterbox Turbo, HumeAI TADA, Kokoro, and Voxtral 4B TTS
 - **Voice cloning and preset voices** — zero-shot cloning from a reference sample, or 50+ curated preset voices via Kokoro and Qwen CustomVoice
 - **Voice changer (RVC)** — re-voice an existing recording as another voice with community RVC `.pth` models (voice-to-voice conversion)
 - **23 languages** — from English to Arabic, Japanese, Hindi, Swahili, and more
@@ -86,6 +86,17 @@ The two cloud incumbents sit on opposite halves of the voice I/O loop — Eleven
 - **API-first** — REST API plus a built-in MCP server for integrating voice I/O into your own apps and agents
 - **Native performance** — built with Tauri (Rust), not Electron
 - **Runs everywhere** — macOS (MLX/Metal), Windows (CUDA), Linux, AMD ROCm, Intel Arc, Docker
+
+---
+
+## Fork Additions
+
+This fork tracks upstream [`jamiepine/voicebox`](https://github.com/jamiepine/voicebox) closely while keeping the local voice-work changes explicit. Current local additions on top of upstream include:
+
+- **Voxtral 4B TTS** (`voxtral`) via `mlx-community/Voxtral-4B-TTS-2603-mlx-4bit`, with Apple Silicon MLX preset voices for English, French, Spanish, German, Italian, Portuguese, Dutch, Arabic, and Hindi.
+- **RVC voice conversion** (`rvc`) with community `.pth` checkpoint upload, optional `.index` support, offline file conversion, TTS-to-RVC chaining, and realtime WebSocket/AudioWorklet plumbing.
+- **Apple Silicon MLX paths** for Qwen, TADA, Chatterbox Multilingual, and Voxtral, serialized through a shared MLX worker to reduce Metal contention.
+- **French long-form voice-quality hardening** around language-aware model resolution, Qwen runaway retries, and chunk loudness smoothing.
 
 ---
 
@@ -110,7 +121,7 @@ The two cloud incumbents sit on opposite halves of the voice I/O loop — Eleven
 
 ### Multi-Engine Voice Cloning
 
-Seven TTS engines with different strengths, switchable per-generation:
+Eight TTS engines with different strengths, switchable per generation:
 
 | Engine                      | Languages | Strengths                                                                                                                                |
 | --------------------------- | --------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
@@ -121,11 +132,12 @@ Seven TTS engines with different strengths, switchable per-generation:
 | **Chatterbox Turbo**        | English   | Fast 350M model with paralinguistic emotion/sound tags                                                                                   |
 | **TADA** (1B / 3B)          | 10        | HumeAI speech-language model — 700s+ coherent audio, text-acoustic dual alignment                                                        |
 | **Kokoro**                  | 8         | 50 curated preset voices, tiny 82M model, fast CPU inference                                                                             |
+| **Voxtral 4B TTS**          | 9         | Apple Silicon MLX preset voices using Mistral Voxtral via the MLX community 4-bit conversion                                             |
 
 ### Emotions & Paralinguistic Tags
 
 Only **Chatterbox Turbo** interprets paralinguistic tags like `[laugh]` and
-`[sigh]`. Qwen3-TTS, LuxTTS, Chatterbox Multilingual, and HumeAI TADA read them
+`[sigh]`. Qwen3-TTS, LuxTTS, Chatterbox Multilingual, HumeAI TADA, and Voxtral read them
 literally as text.
 
 With **Chatterbox Turbo** selected, type `/` in the text input to open the tag
@@ -371,7 +383,7 @@ Full API documentation available at `http://127.0.0.1:17493/docs`.
 | Frontend      | React, TypeScript, Tailwind CSS                                                 |
 | State         | Zustand, React Query                                                            |
 | Backend       | FastAPI (Python)                                                                |
-| TTS Engines   | Qwen3-TTS, Qwen CustomVoice, LuxTTS, Chatterbox, Chatterbox Turbo, TADA, Kokoro |
+| TTS Engines   | Qwen3-TTS, Qwen CustomVoice, LuxTTS, Chatterbox, Chatterbox Turbo, TADA, Kokoro, Voxtral |
 | STT           | Whisper / Whisper Turbo (PyTorch or MLX)                                        |
 | Local LLM     | Qwen3 (0.6B / 1.7B / 4B), shared runtime with TTS / STT                         |
 | MCP Server    | FastMCP mounted at `/mcp` (Streamable HTTP) + bundled stdio shim binary         |

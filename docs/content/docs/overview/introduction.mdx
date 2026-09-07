@@ -29,7 +29,8 @@ shared between input and output.
   refine, play-as-voice, promote-to-sample (see [Captures](/overview/captures))
 - **Voice cloning** — 5 cloning engines covering 23 languages. Zero-shot
   cloning from a reference sample (see [Voice Cloning](/overview/voice-cloning))
-- **Preset voices** — 50+ curated voices via Kokoro and Qwen CustomVoice
+- **Preset voices** — 50+ curated voices via Kokoro, Qwen CustomVoice, and
+  Voxtral on Apple Silicon
   for when you don't want to clone (see [Preset Voices](/overview/preset-voices))
 - **Voice changer** — RVC voice-to-voice conversion: re-voice an existing
   recording as another voice using a community `.pth` model (see
@@ -49,7 +50,7 @@ shared between input and output.
 
 ## TTS Engines
 
-Seven engines with different strengths, switchable per-generation:
+Eight engines with different strengths, switchable per-generation:
 
 | Engine | Profile Type | Languages | Strengths |
 |--------|--------------|-----------|-----------|
@@ -59,7 +60,8 @@ Seven engines with different strengths, switchable per-generation:
 | **Chatterbox Multilingual** | Cloned | 23 | Broadest language coverage |
 | **Chatterbox Turbo** | Cloned | English | Fast 350M model with paralinguistic emotion/sound tags |
 | **TADA** (1B / 3B) | Cloned | 10 | HumeAI speech-language model — 700s+ coherent audio |
-| **Kokoro** | Preset (50 voices) | 9 | 82M parameters, CPU realtime, lowest VRAM of any engine |
+| **Kokoro** | Preset (50 voices) | 8 | 82M parameters, CPU realtime, lowest VRAM of any engine |
+| **Voxtral 4B TTS** | Preset (20 voices) | 9 | Apple Silicon MLX preset voices |
 
 ## STT and local LLM
 
@@ -103,7 +105,7 @@ No cloud fallback, no bring-your-own-API-key. Local is the product.
 | Frontend | React, TypeScript, Tailwind CSS |
 | State | Zustand, React Query |
 | Backend | FastAPI (Python) |
-| TTS Engines | Qwen3-TTS, Qwen CustomVoice, LuxTTS, Chatterbox, Chatterbox Turbo, TADA, Kokoro |
+| TTS Engines | Qwen3-TTS, Qwen CustomVoice, LuxTTS, Chatterbox, Chatterbox Turbo, TADA, Kokoro, Voxtral |
 | STT | Whisper / Whisper Turbo (PyTorch or MLX) |
 | Local LLM | Qwen3 0.6B / 1.7B / 4B (MLX or PyTorch) |
 | Effects | Pedalboard (Spotify) |
