@@ -555,7 +555,7 @@ function profileTypeKey(voiceType: string): string {
 /**
  * Editor for the TTS→RVC chain: the cloning-free base voice the text is first
  * spoken with, plus the conversion knobs applied afterwards. The base can be a
- * preset engine voice (Kokoro / Qwen CustomVoice) or an existing non-RVC
+ * preset engine voice (Kokoro / Qwen CustomVoice / Voxtral) or an existing non-RVC
  * Voicebox profile (a flat select over `useProfiles`) — the latter unlocks
  * languages the presets don't cover (e.g. Russian). Reuses the Voice Changer
  * file-mode `ConversionParams` control so bounds and defaults match.
