@@ -28,6 +28,7 @@ const generationSchema = z.object({
       'tada',
       'kokoro',
       'voxtral',
+      'rvc',
     ])
     .optional(),
   personality: z.boolean().optional(),

@@ -44,11 +44,7 @@ export function ProfileCard({ profile, disabled }: ProfileCardProps) {
   const isSelected = selectedProfileId === profile.id;
 
   const handleSelect = () => {
-    if (disabled && isSelected) {
-      setSelectedProfileId(null);
-      setTimeout(() => setSelectedProfileId(profile.id), 0);
-      return;
-    }
+    if (disabled) return;
     setSelectedProfileId(isSelected ? null : profile.id);
   };
 

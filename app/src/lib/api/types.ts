@@ -95,6 +95,7 @@ export interface GenerationRequest {
     | 'tada'
     | 'kokoro'
     | 'voxtral'
+    | 'rvc'
     // `null` explicitly defers engine choice to the profile — the backend
     // resolves the base engine server-side for rvc profiles (TTS→RVC chain).
     | null;

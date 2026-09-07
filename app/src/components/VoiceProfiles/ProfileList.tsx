@@ -5,11 +5,9 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { useProfiles } from '@/lib/hooks/useProfiles';
 import { useUIStore } from '@/stores/uiStore';
+import { isProfileCompatibleWithEngine } from '../Generation/EngineModelSelector';
 import { ProfileCard } from './ProfileCard';
 import { ProfileForm } from './ProfileForm';
-
-/** Engines that use preset (built-in) voices instead of cloned profiles. */
-const PRESET_ENGINES = new Set(['kokoro', 'qwen_custom_voice', 'voxtral']);
 
 export function ProfileList() {
   const { t } = useTranslation();
@@ -17,6 +15,7 @@ export function ProfileList() {
   const setDialogOpen = useUIStore((state) => state.setProfileDialogOpen);
   const selectedEngine = useUIStore((state) => state.selectedEngine);
   const selectedProfileId = useUIStore((state) => state.selectedProfileId);
+  const setSelectedProfileId = useUIStore((state) => state.setSelectedProfileId);
   const cardRefs = useRef<Map<string, HTMLDivElement>>(new Map());
 
   // Scroll to the selected profile after engine/sort changes
@@ -38,7 +37,15 @@ export function ProfileList() {
       cancelAnimationFrame(rafId);
       if (timeoutId) clearTimeout(timeoutId);
     };
-  }, [selectedProfileId, selectedEngine]);
+  }, [selectedProfileId]);
+
+  useEffect(() => {
+    if (!selectedProfileId || !profiles) return;
+    const selectedProfile = profiles.find((profile) => profile.id === selectedProfileId);
+    if (selectedProfile && !isProfileCompatibleWithEngine(selectedProfile, selectedEngine)) {
+      setSelectedProfileId(null);
+    }
+  }, [profiles, selectedEngine, selectedProfileId, setSelectedProfileId]);
 
   if (isLoading) {
     return null;
@@ -55,13 +62,8 @@ export function ProfileList() {
   }
 
   const allProfiles = profiles || [];
-  const isPresetEngine = PRESET_ENGINES.has(selectedEngine);
-
-  /** Whether a profile is supported by the currently selected engine. */
   const isSupported = (p: (typeof allProfiles)[number]) =>
-    isPresetEngine
-      ? p.voice_type === 'preset' && p.preset_engine === selectedEngine
-      : p.voice_type !== 'preset';
+    isProfileCompatibleWithEngine(p, selectedEngine);
 
   // Sort so supported profiles come first
   const sortedProfiles = [...allProfiles].sort(

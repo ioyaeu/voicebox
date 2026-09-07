@@ -28,6 +28,7 @@ const ENGINE_OPTIONS = [
   { value: 'tada:3B', label: 'TADA 3B Multilingual', engine: 'tada' },
   { value: 'kokoro', label: 'Kokoro 82M', engine: 'kokoro' },
   { value: 'voxtral', label: 'Voxtral 4B TTS', engine: 'voxtral' },
+  { value: 'rvc', label: 'RVC', engine: 'rvc' },
 ] as const;
 
 const ENGINE_DESCRIPTIONS: Record<string, string> = {
@@ -39,6 +40,7 @@ const ENGINE_DESCRIPTIONS: Record<string, string> = {
   tada: 'HumeAI, 700s+ coherent audio',
   kokoro: '82M params, CPU realtime, 8 langs',
   voxtral: 'MLX 4-bit, 20 preset voices',
+  rvc: 'Voice conversion chain',
 };
 
 /** Engines that only support English and should force language to 'en' on select. */
@@ -49,9 +51,11 @@ const CLONING_ENGINES = new Set(['qwen', 'luxtts', 'chatterbox', 'chatterbox_tur
 
 type ModelSize = NonNullable<GenerationFormValues['modelSize']>;
 
-function getAvailableOptions(selectedProfile?: VoiceProfileResponse | null) {
-  if (!selectedProfile) return ENGINE_OPTIONS;
-  return ENGINE_OPTIONS.filter((opt) => isProfileCompatibleWithEngine(selectedProfile, opt.engine));
+function getAvailableOptions() {
+  // Engine selection is the source of truth. Profile compatibility is handled
+  // by the profile list and picker, so selecting a new engine can reveal its
+  // voices instead of being blocked by the currently selected profile.
+  return ENGINE_OPTIONS;
 }
 
 export function resolveModelSizeForEngine(
@@ -112,6 +116,8 @@ export function applyEngineSelection(form: UseFormReturn<GenerationFormValues>, 
         form.setValue('language', available[0]?.value ?? 'en');
       }
     }
+  } else if (value === 'rvc') {
+    form.setValue('engine', 'rvc');
   } else {
     form.setValue('engine', value as GenerationFormValues['engine']);
     form.setValue('modelSize', undefined);
@@ -131,24 +137,23 @@ export function applyEngineSelection(form: UseFormReturn<GenerationFormValues>, 
 interface EngineModelSelectorProps {
   form: UseFormReturn<GenerationFormValues>;
   compact?: boolean;
-  selectedProfile?: VoiceProfileResponse | null;
 }
 
-export function EngineModelSelector({ form, compact, selectedProfile }: EngineModelSelectorProps) {
+export function EngineModelSelector({ form, compact }: EngineModelSelectorProps) {
   const engine = form.watch('engine') || 'qwen';
   const modelSize = form.watch('modelSize');
   const language = form.watch('language');
   const resolvedModelSize = resolveModelSizeForEngine(engine, modelSize, language);
   const selectValue = getSelectValue(engine, modelSize, language);
-  const availableOptions = getAvailableOptions(selectedProfile);
+  const availableOptions = getAvailableOptions();
 
   const currentEngineAvailable = availableOptions.some((opt) => opt.value === selectValue);
 
   useEffect(() => {
-    if (resolvedModelSize !== modelSize) {
+    if (engine !== 'rvc' && resolvedModelSize !== modelSize) {
       form.setValue('modelSize', resolvedModelSize);
     }
-  }, [form, modelSize, resolvedModelSize]);
+  }, [engine, form, modelSize, resolvedModelSize]);
 
   useEffect(() => {
     if (!currentEngineAvailable && availableOptions.length > 0) {
@@ -196,8 +201,6 @@ export function isProfileCompatibleWithEngine(
   const voiceType = profile.voice_type || 'cloned';
   if (voiceType === 'preset') return profile.preset_engine === engine;
   if (voiceType === 'cloned') return CLONING_ENGINES.has(engine);
-  // rvc profiles own their base engine server-side and never expose a manual
-  // TTS engine choice — the generation box hides this selector for them.
-  if (voiceType === 'rvc') return false;
+  if (voiceType === 'rvc') return engine === 'rvc';
   return true; // designed — future
 }
