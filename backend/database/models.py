@@ -85,6 +85,9 @@ class Generation(Base):
     status = Column(String, default="completed")
     error = Column(Text, nullable=True)
     is_favorited = Column(Boolean, default=False)
+    # Agent speech is ephemeral unless the caller explicitly asks to retain it.
+    # Existing/manual generations default to kept audio for backwards compatibility.
+    keep_audio = Column(Boolean, nullable=False, default=True)
     # Origin of this generation — "manual" for plain /generate calls,
     # "personality_speak" for rows whose text was rewritten through the
     # profile's personality LLM before TTS. Future sources (bulk import,

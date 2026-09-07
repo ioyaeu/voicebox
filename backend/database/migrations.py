@@ -199,6 +199,8 @@ def _migrate_generations(engine, inspector, tables: set[str]) -> None:
         _add_column(engine, "generations", "model_size VARCHAR", "model_size")
     if "is_favorited" not in columns:
         _add_column(engine, "generations", "is_favorited BOOLEAN DEFAULT 0", "is_favorited")
+    if "keep_audio" not in columns:
+        _add_column(engine, "generations", "keep_audio BOOLEAN NOT NULL DEFAULT 1", "keep_audio")
     if "source" not in columns:
         _add_column(
             engine,

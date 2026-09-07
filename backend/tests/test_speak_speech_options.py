@@ -7,6 +7,8 @@ stub the generation step, so they pin what text reaches TTS without loading
 a model.
 """
 
+from datetime import datetime, timedelta
+
 import pytest
 from fastmcp import FastMCP
 from fastmcp.exceptions import ToolError
@@ -14,11 +16,12 @@ from starlette.requests import Request
 
 from backend import config, models
 from backend.database import get_db
-from backend.database.models import MCPClientBinding, VoiceProfile
+from backend.database.models import Generation as DBGeneration, MCPClientBinding, VoiceProfile
 from backend.mcp_server import events as mcp_events, tools
 from backend.mcp_server.context import current_client_id
 from backend.routes import generations
 from backend.routes.speak import speak
+from backend.services.history import delete_expired_ephemeral_generations
 
 CLIENT = "claude-code"
 MARKDOWN = (
@@ -93,6 +96,7 @@ def _rest_request() -> Request:
 async def test_rest_applies_binding_defaults(db, captured_generation):
     await speak(models.SpeakRequest(text=MARKDOWN), _rest_request(), db)
     spoken = captured_generation["req"].text
+    assert captured_generation["req"].keep_audio is False
     assert "rm -rf" not in spoken
     assert "|" not in spoken
     assert "**" not in spoken
@@ -109,6 +113,12 @@ async def test_rest_explicit_args_override_binding(db, captured_generation):
         db,
     )
     assert captured_generation["req"].text == MARKDOWN.strip()
+
+
+@pytest.mark.asyncio
+async def test_rest_can_keep_audio(db, captured_generation):
+    await speak(models.SpeakRequest(text="Keep this audio.", keep_audio=True), _rest_request(), db)
+    assert captured_generation["req"].keep_audio is True
 
 
 @pytest.mark.asyncio
@@ -165,12 +175,19 @@ async def test_tool_applies_binding_defaults(db, mcp, captured_speak, as_client)
     await mcp.call_tool("voicebox.speak", {"text": MARKDOWN})
     assert "rm -rf" not in captured_speak["text"]
     assert len(captured_speak["text"]) <= 120
+    assert captured_speak["keep_audio"] is False
 
 
 @pytest.mark.asyncio
 async def test_tool_explicit_args_override_binding(db, mcp, captured_speak, as_client):
     await mcp.call_tool("voicebox.speak", {"text": MARKDOWN, "plain_text": False, "max_chars": 10000})
     assert captured_speak["text"] == MARKDOWN.strip()
+
+
+@pytest.mark.asyncio
+async def test_tool_can_keep_audio(db, mcp, captured_speak, as_client):
+    await mcp.call_tool("voicebox.speak", {"text": "Keep this audio.", "keep_audio": True})
+    assert captured_speak["keep_audio"] is True
 
 
 @pytest.mark.asyncio
@@ -191,3 +208,22 @@ async def test_tool_rejects_large_max_chars(db, mcp, captured_speak, as_client):
 async def test_tool_rejects_text_that_strips_to_nothing(db, mcp, captured_speak, as_client):
     with pytest.raises(ToolError, match="Nothing left to speak"):
         await mcp.call_tool("voicebox.speak", {"text": "```\ncode\n```"})
+
+
+def test_expired_ephemeral_generations_are_deleted(db):
+    db.add(
+        DBGeneration(
+            id="temporary-generation",
+            profile_id="p1",
+            text="temporary",
+            audio_path="",
+            duration=1,
+            status="completed",
+            keep_audio=False,
+            created_at=datetime.utcnow() - timedelta(minutes=20),
+        )
+    )
+    db.commit()
+
+    assert delete_expired_ephemeral_generations(db) == 1
+    assert db.query(DBGeneration).filter_by(id="temporary-generation").first() is None

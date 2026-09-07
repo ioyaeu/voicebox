@@ -41,7 +41,8 @@ def register_tools(mcp: FastMCP) -> None:
         description=(
             "Speak text in a Voicebox voice profile. Returns a generation id "
             "the caller can poll at /generate/{id}/status. Audio plays on the "
-            "user's speakers and is saved to the Captures / History tab."
+            "user's speakers. Audio is temporary by default; set keep_audio=true "
+            "to save it in the History tab."
         ),
     )
     async def voicebox_speak(
@@ -53,6 +54,7 @@ def register_tools(mcp: FastMCP) -> None:
         model_size: Literal["1.7B", "0.6B", "1B", "3B"] | None = None,
         plain_text: bool | None = None,
         max_chars: int | None = None,
+        keep_audio: bool = False,
     ) -> dict[str, Any]:
         """Speak ``text`` in a voice profile.
 
@@ -78,6 +80,11 @@ def register_tools(mcp: FastMCP) -> None:
         a short summary. Both default to the per-client binding's
         ``default_plain_text`` / ``default_max_chars``, then to off. They run
         before any personality rewrite, so the LLM sees the trimmed text.
+
+        Audio is temporary by default and is removed after playback. Set
+        ``keep_audio=true`` when the user explicitly asks to keep, save,
+        export, or reuse the generated audio (for example, when the prompt
+        says "keep audio").
         """
         from ..database.models import MCPClientBinding
 
@@ -140,6 +147,7 @@ def register_tools(mcp: FastMCP) -> None:
                 language=language,
                 personality=use_persona,
                 model_size=model_size,
+                keep_audio=keep_audio,
                 db=db,
             )
         finally:
@@ -270,6 +278,7 @@ async def _speak(
     language: str | None,
     personality: bool,
     model_size: str | None = None,
+    keep_audio: bool = False,
     db,
 ) -> dict[str, Any]:
     """Delegate to POST /generate — the route handles personality-rewrite
@@ -286,6 +295,7 @@ async def _speak(
         engine=engine,
         personality=personality,
         model_size=model_size,
+        keep_audio=keep_audio,
     )
     generation = await generate_speech(req, db)
     return _speak_response(generation, profile_name, source="mcp")

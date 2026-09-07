@@ -94,6 +94,7 @@ async def speak(
             language=data.language or "en",
             engine=engine,
             personality=bool(personality_flag),
+            keep_audio=data.keep_audio,
         ),
         db,
     )

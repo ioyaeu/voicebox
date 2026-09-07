@@ -137,6 +137,10 @@ class GenerationRequest(BaseModel):
         default=50, ge=0, le=500, description="Crossfade duration in ms between chunks (0 for hard cut)"
     )
     normalize: bool = Field(default=True, description="Normalize output audio volume")
+    keep_audio: bool = Field(
+        default=True,
+        description="Keep the generated audio in History. Agent-facing speak endpoints override this to false by default.",
+    )
     effects_chain: Optional[List["EffectConfig"]] = Field(
         None, description="Effects chain to apply after generation (overrides profile default)"
     )
@@ -158,6 +162,7 @@ class GenerationResponse(BaseModel):
     status: str = "completed"
     error: Optional[str] = None
     is_favorited: bool = False
+    keep_audio: bool = True
     source: str = "manual"
     created_at: datetime
     versions: Optional[List["GenerationVersionResponse"]] = None
@@ -420,6 +425,10 @@ class SpeakRequest(BaseModel):
         ge=50,
         le=10000,
         description="Cap the spoken text at this many characters, cut on a sentence boundary. When null, the per-client binding's default_max_chars decides; unset means no cap.",
+    )
+    keep_audio: bool = Field(
+        default=False,
+        description="Keep the generated audio in History. Defaults to temporary agent speech; set true when the user asks to keep or save the audio.",
     )
 
 

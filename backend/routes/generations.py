@@ -135,6 +135,7 @@ async def generate_speech(
         engine=engine,
         model_size=model_size if engine_has_model_sizes(engine) else None,
         source=source,
+        keep_audio=data.keep_audio,
     )
 
     task_manager.start_generation(
@@ -328,6 +329,7 @@ async def get_generation_status(generation_id: str, db: Session = Depends(get_db
                     "status": gen.status or "completed",
                     "duration": gen.duration,
                     "error": gen.error,
+                    "keep_audio": bool(gen.keep_audio),
                     # Agent-originated sources ("mcp", "rest") skip main-window
                     # autoplay — the floating pill plays those directly.
                     "source": gen.source,

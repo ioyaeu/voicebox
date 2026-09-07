@@ -104,6 +104,7 @@ export interface GenerationRequest {
   max_chunk_chars?: number;
   crossfade_ms?: number;
   normalize?: boolean;
+  keep_audio?: boolean;
   effects_chain?: EffectConfig[];
 }
 
@@ -132,6 +133,7 @@ export interface GenerationResponse {
   status: 'loading_model' | 'generating' | 'converting' | 'completed' | 'failed';
   error?: string;
   is_favorited?: boolean;
+  keep_audio?: boolean;
   created_at: string;
   versions?: GenerationVersionResponse[];
   active_version_id?: string;

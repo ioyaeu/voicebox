@@ -15,6 +15,9 @@ from ..database import Generation as DBGeneration, GenerationVersion as DBGenera
 from .. import config
 
 
+EPHEMERAL_AUDIO_GRACE_SECONDS = 15 * 60
+
+
 def _get_versions_for_generation(generation_id: str, db: Session) -> tuple:
     """Get versions list and active version ID for a generation."""
     import json
@@ -66,6 +69,7 @@ async def create_generation(
     engine: Optional[str] = "qwen",
     model_size: Optional[str] = None,
     source: str = "manual",
+    keep_audio: bool = True,
 ) -> GenerationResponse:
     """
     Create a new generation history entry.
@@ -87,6 +91,8 @@ async def create_generation(
             /generate calls; ``"personality_speak"`` for rows created
             by the /profiles/{id}/speak endpoint. Enables filtering the
             history view for personality-driven output.
+        keep_audio: Whether the generated audio should remain available after
+            an agent finishes playing it.
 
     Returns:
         Created generation entry
@@ -104,6 +110,7 @@ async def create_generation(
         model_size=model_size,
         status=status,
         source=source,
+        keep_audio=keep_audio,
         created_at=datetime.utcnow(),
     )
 
@@ -224,6 +231,7 @@ async def list_generations(
             status=generation.status or "completed",
             error=generation.error,
             is_favorited=bool(generation.is_favorited),
+            keep_audio=bool(generation.keep_audio),
             created_at=generation.created_at,
             versions=versions,
             active_version_id=active_version_id,
@@ -304,6 +312,51 @@ async def delete_failed_generations(db: Session) -> int:
         count += 1
 
     db.commit()
+    return count
+
+
+def delete_expired_ephemeral_generations(
+    db: Session,
+    now: Optional[datetime] = None,
+    grace_seconds: int = EPHEMERAL_AUDIO_GRACE_SECONDS,
+) -> int:
+    """Delete temporary speech that survived beyond its playback grace period.
+
+    The normal cleanup happens in the desktop audio element's ``ended`` handler.
+    This startup sweep handles crashes, closed windows, and clients that never
+    connected to the floating playback surface.
+    """
+    from . import versions as versions_mod
+
+    now = now or datetime.utcnow()
+    candidates = (
+        db.query(DBGeneration)
+        .filter(
+            DBGeneration.keep_audio.is_(False),
+            DBGeneration.status.in_(["completed", "failed"]),
+        )
+        .all()
+    )
+    count = 0
+    for generation in candidates:
+        age = (now - generation.created_at).total_seconds()
+        required_age = grace_seconds + max(generation.duration or 0, 0)
+        if age < required_age:
+            continue
+
+        versions_mod.delete_versions_for_generation(generation.id, db)
+        if generation.audio_path:
+            audio_path = config.resolve_storage_path(generation.audio_path)
+            if audio_path is not None and audio_path.exists():
+                try:
+                    audio_path.unlink()
+                except OSError:
+                    pass
+        db.delete(generation)
+        count += 1
+
+    if count:
+        db.commit()
     return count
 
 
