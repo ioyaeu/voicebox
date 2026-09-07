@@ -460,6 +460,12 @@ class ApiClient {
     });
   }
 
+  async deleteGenerationAudio(generationId: string): Promise<void> {
+    await this.request<void>(`/history/${generationId}/audio`, {
+      method: 'DELETE',
+    });
+  }
+
   async clearFailedGenerations(): Promise<{ deleted: number }> {
     return this.request<{ deleted: number }>(`/history/failed`, {
       method: 'DELETE',

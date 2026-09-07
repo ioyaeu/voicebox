@@ -18,6 +18,15 @@ from .. import config
 EPHEMERAL_AUDIO_GRACE_SECONDS = 15 * 60
 
 
+def get_available_audio_path(audio_path: Optional[str]) -> Optional[str]:
+    """Return a stored audio path only while its file is still available."""
+    if not audio_path:
+        return None
+
+    resolved = config.resolve_storage_path(audio_path)
+    return audio_path if resolved is not None and resolved.is_file() else None
+
+
 def _get_versions_for_generation(generation_id: str, db: Session) -> tuple:
     """Get versions list and active version ID for a generation."""
     import json
@@ -165,7 +174,9 @@ async def get_generation(
     if not generation:
         return None
     
-    return GenerationResponse.model_validate(generation)
+    response = GenerationResponse.model_validate(generation)
+    response.audio_path = get_available_audio_path(response.audio_path)
+    return response
 
 
 async def list_generations(
@@ -199,6 +210,10 @@ async def list_generations(
     if query.search:
         search_pattern = f"%{query.search}%"
         q = q.filter(DBGeneration.text.like(search_pattern))
+
+    # Agent speech remains in the database for audit/debugging, but once its
+    # ephemeral audio is gone it is no longer useful in the user-facing history.
+    q = q.filter(or_(DBGeneration.keep_audio.is_(True), DBGeneration.audio_path.isnot(None)))
     
     # Get total count before pagination
     total_count = q.count()
@@ -222,7 +237,7 @@ async def list_generations(
             profile_name=profile_name,
             text=generation.text,
             language=generation.language,
-            audio_path=generation.audio_path,
+            audio_path=get_available_audio_path(generation.audio_path),
             duration=generation.duration,
             seed=generation.seed,
             instruct=generation.instruct,
@@ -278,6 +293,25 @@ async def delete_generation(
     return True
 
 
+async def delete_generation_audio(
+    generation_id: str,
+    db: Session,
+) -> bool:
+    """Delete a generation's audio file while retaining its history row."""
+    generation = db.query(DBGeneration).filter_by(id=generation_id).first()
+    if not generation:
+        return False
+
+    if generation.audio_path:
+        audio_path = config.resolve_storage_path(generation.audio_path)
+        if audio_path is not None and audio_path.is_file():
+            audio_path.unlink()
+
+    generation.audio_path = None
+    db.commit()
+    return True
+
+
 async def delete_failed_generations(db: Session) -> int:
     """
     Delete every generation whose status is 'failed'.
@@ -320,11 +354,12 @@ def delete_expired_ephemeral_generations(
     now: Optional[datetime] = None,
     grace_seconds: int = EPHEMERAL_AUDIO_GRACE_SECONDS,
 ) -> int:
-    """Delete temporary speech that survived beyond its playback grace period.
+    """Remove expired temporary audio while retaining its history row.
 
     The normal cleanup happens in the desktop audio element's ``ended`` handler.
     This startup sweep handles crashes, closed windows, and clients that never
-    connected to the floating playback surface.
+    connected to the floating playback surface. The transcript remains in the
+    history, but its audio path is cleared so clients cannot offer playback.
     """
     from . import versions as versions_mod
 
@@ -334,6 +369,7 @@ def delete_expired_ephemeral_generations(
         .filter(
             DBGeneration.keep_audio.is_(False),
             DBGeneration.status.in_(["completed", "failed"]),
+            DBGeneration.audio_path.isnot(None),
         )
         .all()
     )
@@ -352,7 +388,7 @@ def delete_expired_ephemeral_generations(
                     audio_path.unlink()
                 except OSError:
                     pass
-        db.delete(generation)
+        generation.audio_path = None
         count += 1
 
     if count:

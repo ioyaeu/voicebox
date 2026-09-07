@@ -210,7 +210,7 @@ async def test_tool_rejects_text_that_strips_to_nothing(db, mcp, captured_speak,
         await mcp.call_tool("voicebox.speak", {"text": "```\ncode\n```"})
 
 
-def test_expired_ephemeral_generations_are_deleted(db):
+def test_expired_ephemeral_audio_is_deleted_but_history_is_kept(db):
     db.add(
         DBGeneration(
             id="temporary-generation",
@@ -226,4 +226,5 @@ def test_expired_ephemeral_generations_are_deleted(db):
     db.commit()
 
     assert delete_expired_ephemeral_generations(db) == 1
-    assert db.query(DBGeneration).filter_by(id="temporary-generation").first() is None
+    generation = db.query(DBGeneration).filter_by(id="temporary-generation").one()
+    assert generation.audio_path is None

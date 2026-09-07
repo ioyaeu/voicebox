@@ -124,7 +124,7 @@ export interface GenerationResponse {
   profile_id: string;
   text: string;
   language: string;
-  audio_path?: string;
+  audio_path?: string | null;
   duration?: number;
   seed?: number;
   instruct?: string;

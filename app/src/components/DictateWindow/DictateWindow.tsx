@@ -127,7 +127,7 @@ export function DictateWindow() {
 
   const deleteEphemeralGeneration = (generationId: string, keepAudio: boolean) => {
     if (keepAudio) return;
-    apiClient.deleteGeneration(generationId).catch((err) => {
+    apiClient.deleteGenerationAudio(generationId).catch((err) => {
       console.warn('[dictate] failed to clean up temporary speech:', err);
     });
   };

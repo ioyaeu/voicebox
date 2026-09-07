@@ -646,6 +646,7 @@
   },
   "history": {
     "empty": "Encore aucune génération vocale…",
+    "audioUnavailable": "Audio indisponible",
     "actions": {
       "menu": "Actions",
       "play": "Lire",

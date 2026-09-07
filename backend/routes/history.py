@@ -38,6 +38,18 @@ async def get_stats(db: Session = Depends(get_db)):
     return await history.get_generation_stats(db)
 
 
+@router.delete("/history/{generation_id}/audio")
+async def delete_generation_audio(
+    generation_id: str,
+    db: Session = Depends(get_db),
+):
+    """Delete only a generation's audio file, keeping its history row."""
+    success = await history.delete_generation_audio(generation_id, db)
+    if not success:
+        raise HTTPException(status_code=404, detail="Generation not found")
+    return {"message": "Generation audio deleted successfully"}
+
+
 @router.post("/history/import")
 async def import_generation(
     file: UploadFile = File(...),
@@ -92,7 +104,7 @@ async def get_generation(
         profile_name=profile_name,
         text=gen.text,
         language=gen.language,
-        audio_path=gen.audio_path,
+        audio_path=history.get_available_audio_path(gen.audio_path),
         duration=gen.duration,
         seed=gen.seed,
         instruct=gen.instruct,
