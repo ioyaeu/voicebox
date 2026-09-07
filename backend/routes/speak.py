@@ -16,9 +16,8 @@ from sqlalchemy.orm import Session
 from .. import models
 from ..database import MCPClientBinding, get_db
 from ..mcp_server import events as mcp_events
-from ..mcp_server.resolve import resolve_profile
+from ..mcp_server.resolve import resolve_bound_engine, resolve_profile
 from ..utils.speech_text import prepare_speech_text
-
 
 logger = logging.getLogger(__name__)
 
@@ -66,9 +65,11 @@ async def speak(
     if personality_flag is None and binding is not None:
         personality_flag = bool(binding.default_personality)
 
-    engine = data.engine
-    if engine is None and binding is not None:
-        engine = binding.default_engine
+    engine = resolve_bound_engine(
+        data.engine,
+        binding.default_engine if binding is not None else None,
+        profile,
+    )
 
     # Speech-friendly transforms run before the personality rewrite inside
     # generate_speech, so the LLM sees the stripped, capped text.

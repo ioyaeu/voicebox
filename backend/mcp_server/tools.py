@@ -18,13 +18,11 @@ from fastmcp import FastMCP
 
 from .. import models
 from ..database import get_db
-from ..services import captures as captures_service
-from ..services import profiles as profiles_service
+from ..services import captures as captures_service, profiles as profiles_service
 from ..utils.speech_text import MAX_MAX_CHARS, MIN_MAX_CHARS, prepare_speech_text
 from . import events as mcp_events
 from .context import current_client_id, request_is_loopback
-from .resolve import resolve_profile
-
+from .resolve import resolve_bound_engine, resolve_profile
 
 logger = logging.getLogger(__name__)
 
@@ -116,9 +114,11 @@ def register_tools(mcp: FastMCP) -> None:
             if resolved_personality is None and binding is not None:
                 resolved_personality = bool(binding.default_personality)
 
-            resolved_engine = engine
-            if resolved_engine is None and binding is not None:
-                resolved_engine = binding.default_engine
+            resolved_engine = resolve_bound_engine(
+                engine,
+                binding.default_engine if binding is not None else None,
+                vp,
+            )
 
             resolved_plain_text = plain_text
             if resolved_plain_text is None and binding is not None:

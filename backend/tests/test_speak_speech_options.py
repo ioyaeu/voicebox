@@ -1,7 +1,8 @@
 """``plain_text`` / ``max_chars`` on ``voicebox.speak`` and ``POST /speak``.
 
 Both surfaces resolve the two knobs the same way as ``personality`` and
-``engine``: explicit argument → per-client binding default → off. These
+``engine``: explicit argument first, then profile-owned engines for preset/RVC
+profiles, then the per-client binding default for flexible profiles. These
 tests run the real resolution code against a throwaway SQLite database and
 stub the generation step, so they pin what text reaches TTS without loading
 a model.
@@ -89,6 +90,24 @@ def _rest_request() -> Request:
     )
 
 
+def _bind_mismatched_voxtral_preset(db) -> None:
+    """Create a Voxtral profile while the client binding still prefers Kokoro."""
+    db.add(
+        VoiceProfile(
+            id="p2",
+            name="Voxtral female",
+            language="fr",
+            voice_type="preset",
+            preset_engine="voxtral",
+            preset_voice_id="fr_female",
+            default_engine="voxtral",
+        )
+    )
+    binding = db.query(MCPClientBinding).filter_by(client_id=CLIENT).one()
+    binding.default_engine = "kokoro"
+    db.commit()
+
+
 # ── REST /speak ────────────────────────────────────────────────────────────
 
 
@@ -103,6 +122,21 @@ async def test_rest_applies_binding_defaults(db, captured_generation):
     assert spoken.startswith("Verdict\nVoici la réponse finale.\nVoir .mcp.json")
     assert len(spoken) <= 120
     assert spoken.endswith(".")  # cut on a sentence end, not mid-word
+
+
+@pytest.mark.asyncio
+async def test_rest_profile_engine_beats_binding_default(db, captured_generation):
+    _bind_mismatched_voxtral_preset(db)
+
+    await speak(
+        models.SpeakRequest(text="Use the selected profile.", profile="Voxtral female"),
+        _rest_request(),
+        db,
+    )
+
+    # None lets the generation route resolve the preset's intrinsic Voxtral
+    # engine instead of applying the binding's unrelated Kokoro preference.
+    assert captured_generation["req"].engine is None
 
 
 @pytest.mark.asyncio
@@ -176,6 +210,18 @@ async def test_tool_applies_binding_defaults(db, mcp, captured_speak, as_client)
     assert "rm -rf" not in captured_speak["text"]
     assert len(captured_speak["text"]) <= 120
     assert captured_speak["keep_audio"] is False
+
+
+@pytest.mark.asyncio
+async def test_tool_profile_engine_beats_binding_default(db, mcp, captured_speak, as_client):
+    _bind_mismatched_voxtral_preset(db)
+
+    await mcp.call_tool(
+        "voicebox.speak",
+        {"text": "Use the selected profile.", "profile": "Voxtral female"},
+    )
+
+    assert captured_speak["engine"] is None
 
 
 @pytest.mark.asyncio
