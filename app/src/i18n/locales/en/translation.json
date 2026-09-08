@@ -1127,6 +1127,48 @@
         "copy": "Copy",
         "copied": "Copied"
       },
+      "sessions": {
+        "title": "Incremental speech",
+        "description": "For streamed agent text, use speech sessions instead of one large speak call. Voicebox renders ordered chunks and owns playback.",
+        "tools": {
+          "title": "Session tools",
+          "description": "Start one speech session, append numbered text chunks, then finish or cancel it.",
+          "badge": "MCP"
+        },
+        "flow": {
+          "title": "Typical MCP flow",
+          "description": "Append calls must use increasing sequence numbers so retries cannot duplicate audio."
+        },
+        "rest": {
+          "title": "REST session API",
+          "description": "The VS Code bridge uses the same session service through loopback HTTP."
+        }
+      },
+      "agentBridge": {
+        "title": "Automatic VS Code narration",
+        "description": "The local prototype keeps the original Claude and Codex VS Code panels, listens to their public answer stream, and forwards prose to speech sessions.",
+        "bindings": {
+          "title": "Client ids",
+          "description": "Create matching voice bindings below to choose who speaks with which profile.",
+          "badge": "local"
+        },
+        "preview": {
+          "title": "Preview install",
+          "description": "Shows the user settings and runtime paths without writing them."
+        },
+        "install": {
+          "title": "Install wrappers",
+          "description": "Opt-in macOS source-checkout prototype. Reload VS Code after running it."
+        },
+        "restore": {
+          "title": "Restore wrappers",
+          "description": "Removes the two VS Code wrapper settings when the saved rollback snapshot still matches."
+        },
+        "runtime": {
+          "title": "Runtime config",
+          "description": "Set enabled to false here to let new VS Code agent processes start without narration."
+        }
+      },
       "defaultVoice": {
         "title": "Default voice",
         "description": "Used when an agent calls voicebox.speak without a specific profile and has no per-client binding.",
@@ -1162,9 +1204,11 @@
           "speak": "Speak text in a voice profile.",
           "transcribe": "Whisper STT on a clip.",
           "listCaptures": "Recent dictations / recordings.",
-          "listProfiles": "Available voice profiles."
+          "listProfiles": "Available voice profiles.",
+          "speechSessions": "Incremental speech sessions for streamed text."
         },
-        "postSpeak": "Also exposed as <code>POST /speak</code> for shell scripts, ACP, A2A."
+        "agentBridge": "<code>speech_*</code> powers local automatic narration; it is separate from MCP setup.",
+        "postSpeak": "Also exposed as <code>POST /speak</code> and <code>/speak/sessions</code> for loopback clients."
       }
     },
     "gpu": {

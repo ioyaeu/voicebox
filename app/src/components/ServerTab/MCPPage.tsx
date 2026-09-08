@@ -1,6 +1,7 @@
-import { Check, Copy, Plug, Trash2, Waypoints } from 'lucide-react';
+import { Check, Copy, Plug, Radio, RotateCcw, Terminal, Trash2 } from 'lucide-react';
 import { useState } from 'react';
 import { Trans, useTranslation } from 'react-i18next';
+import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Input } from '@/components/ui/input';
@@ -34,10 +35,18 @@ function getStdioShimCommand(): string {
   return '/Applications/Voicebox.app/Contents/MacOS/voicebox-mcp';
 }
 
+const SPEECH_SESSION_TOOLS = [
+  'voicebox.speech_start',
+  'voicebox.speech_append',
+  'voicebox.speech_finish',
+  'voicebox.speech_status',
+  'voicebox.speech_cancel',
+] as const;
+
 /**
- * Settings → MCP — configure per-agent voice binding and show copy-paste
- * install snippets for major MCP clients. Backend runs at /mcp on the
- * existing Voicebox server; this page is the agent-onboarding surface.
+ * Settings -> MCP — configure per-agent voice binding and show copy-paste
+ * install snippets for major MCP clients and the local VS Code narration
+ * bridge prototype.
  */
 export function MCPPage() {
   const { t } = useTranslation();
@@ -49,6 +58,13 @@ export function MCPPage() {
   const defaultProfileId = captureSettings?.default_playback_voice_id ?? '';
   const mcpUrl = `${serverUrl}/mcp`;
   const stdioShimCommand = getStdioShimCommand();
+  const restSessionSnippet = [
+    `POST ${serverUrl}/speak/sessions`,
+    `POST ${serverUrl}/speak/sessions/{session_id}/append`,
+    `POST ${serverUrl}/speak/sessions/{session_id}/finish`,
+    `GET  ${serverUrl}/speak/sessions/{session_id}`,
+    `POST ${serverUrl}/speak/sessions/{session_id}/cancel`,
+  ].join('\n');
 
   const [newClientId, setNewClientId] = useState('');
   const [newLabel, setNewLabel] = useState('');
@@ -125,6 +141,72 @@ export function MCPPage() {
               2,
             )}
           />
+        </SettingSection>
+
+        <SettingSection
+          title={t('settings.mcp.sessions.title')}
+          description={t('settings.mcp.sessions.description')}
+        >
+          <SettingRow
+            title={t('settings.mcp.sessions.tools.title')}
+            description={t('settings.mcp.sessions.tools.description')}
+            action={<Badge variant="secondary">{t('settings.mcp.sessions.tools.badge')}</Badge>}
+          >
+            <ToolList tools={SPEECH_SESSION_TOOLS} />
+          </SettingRow>
+          <SnippetRow
+            title={t('settings.mcp.sessions.flow.title')}
+            description={t('settings.mcp.sessions.flow.description')}
+            snippet={[
+              'voicebox.speech_start(keep_audio=false)',
+              'voicebox.speech_append(session_id, sequence=0, text="First sentence.")',
+              'voicebox.speech_append(session_id, sequence=1, text="Next sentence.")',
+              'voicebox.speech_finish(session_id)',
+              'voicebox.speech_status(session_id)',
+            ].join('\n')}
+          />
+          <SnippetRow
+            title={t('settings.mcp.sessions.rest.title')}
+            description={t('settings.mcp.sessions.rest.description')}
+            snippet={restSessionSnippet}
+          />
+        </SettingSection>
+
+        <SettingSection
+          title={t('settings.mcp.agentBridge.title')}
+          description={t('settings.mcp.agentBridge.description')}
+        >
+          <SettingRow
+            title={t('settings.mcp.agentBridge.bindings.title')}
+            description={t('settings.mcp.agentBridge.bindings.description')}
+            action={<Badge variant="outline">{t('settings.mcp.agentBridge.bindings.badge')}</Badge>}
+          >
+            <ToolList tools={['claude-code', 'codex-vscode']} />
+          </SettingRow>
+          <SnippetRow
+            title={t('settings.mcp.agentBridge.preview.title')}
+            description={t('settings.mcp.agentBridge.preview.description')}
+            snippet="node scripts/install-agent-bridge.mjs --claude --codex-experimental"
+          />
+          <SnippetRow
+            title={t('settings.mcp.agentBridge.install.title')}
+            description={t('settings.mcp.agentBridge.install.description')}
+            snippet="node scripts/install-agent-bridge.mjs --claude --codex-experimental --apply"
+          />
+          <SnippetRow
+            title={t('settings.mcp.agentBridge.restore.title')}
+            description={t('settings.mcp.agentBridge.restore.description')}
+            snippet="node scripts/install-agent-bridge.mjs --restore --apply"
+          />
+          <SettingRow
+            title={t('settings.mcp.agentBridge.runtime.title')}
+            description={t('settings.mcp.agentBridge.runtime.description')}
+            action={<RotateCcw className="h-4 w-4 text-muted-foreground" />}
+          >
+            <code className="block text-[11px] p-3 rounded-md bg-muted/50 break-all">
+              ~/.local/share/voicebox/agent-bridge/config.json
+            </code>
+          </SettingRow>
         </SettingSection>
 
         <SettingSection
@@ -323,15 +405,37 @@ export function MCPPage() {
               <code className="text-accent">voicebox.list_profiles</code>
               <div>{t('settings.mcp.sidebar.tools.listProfiles')}</div>
             </li>
+            <li>
+              <code className="text-accent">voicebox.speech_*</code>
+              <div>{t('settings.mcp.sidebar.tools.speechSessions')}</div>
+            </li>
           </ul>
         </div>
         <div className="flex items-center gap-2 text-xs text-muted-foreground">
-          <Waypoints className="h-3.5 w-3.5 text-accent" />
+          <Radio className="h-3.5 w-3.5 text-accent" />
+          <span>
+            <Trans i18nKey="settings.mcp.sidebar.agentBridge" components={{ code: <code /> }} />
+          </span>
+        </div>
+        <div className="flex items-center gap-2 text-xs text-muted-foreground">
+          <Terminal className="h-3.5 w-3.5 text-accent" />
           <span>
             <Trans i18nKey="settings.mcp.sidebar.postSpeak" components={{ code: <code /> }} />
           </span>
         </div>
       </aside>
+    </div>
+  );
+}
+
+function ToolList({ tools }: { tools: readonly string[] }) {
+  return (
+    <div className="flex flex-wrap gap-2">
+      {tools.map((tool) => (
+        <code key={tool} className="text-[11px] rounded-md border bg-background px-2 py-1">
+          {tool}
+        </code>
+      ))}
     </div>
   );
 }

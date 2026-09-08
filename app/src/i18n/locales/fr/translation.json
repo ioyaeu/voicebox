@@ -1052,6 +1052,48 @@
         "copy": "Copier",
         "copied": "Copié"
       },
+      "sessions": {
+        "title": "Lecture incrémentale",
+        "description": "Pour le texte d'agent en flux, utilisez les sessions de lecture plutôt qu'un grand appel speak. Voicebox rend les chunks dans l'ordre et garde la main sur la lecture.",
+        "tools": {
+          "title": "Outils de session",
+          "description": "Démarrez une session de lecture, ajoutez des chunks numérotés, puis terminez ou annulez-la.",
+          "badge": "MCP"
+        },
+        "flow": {
+          "title": "Flux MCP typique",
+          "description": "Les appels append doivent utiliser des numéros de séquence croissants pour que les retries ne dupliquent pas l'audio."
+        },
+        "rest": {
+          "title": "API REST de session",
+          "description": "Le bridge VS Code utilise le même service de session via HTTP loopback."
+        }
+      },
+      "agentBridge": {
+        "title": "Narration VS Code automatique",
+        "description": "Le prototype local conserve les panneaux VS Code Claude et Codex d'origine, écoute leur flux de réponse public, puis envoie la prose aux sessions de lecture.",
+        "bindings": {
+          "title": "Identifiants client",
+          "description": "Créez les liaisons vocales correspondantes ci-dessous pour choisir qui parle avec quel profil.",
+          "badge": "local"
+        },
+        "preview": {
+          "title": "Prévisualiser l'installation",
+          "description": "Affiche les réglages utilisateur et chemins runtime sans les écrire."
+        },
+        "install": {
+          "title": "Installer les wrappers",
+          "description": "Prototype macOS opt-in depuis le checkout source. Rechargez VS Code après l'exécution."
+        },
+        "restore": {
+          "title": "Restaurer les wrappers",
+          "description": "Retire les deux réglages wrapper de VS Code quand le snapshot de rollback correspond toujours."
+        },
+        "runtime": {
+          "title": "Config runtime",
+          "description": "Passez enabled à false ici pour que les nouveaux processus agents VS Code démarrent sans narration."
+        }
+      },
       "defaultVoice": {
         "title": "Voix par défaut",
         "description": "Utilisée quand un agent appelle voicebox.speak sans profil spécifique et sans liaison par client.",
@@ -1087,9 +1129,11 @@
           "speak": "Prononcer un texte avec un profil vocal.",
           "transcribe": "STT Whisper sur un clip.",
           "listCaptures": "Dictées / enregistrements récents.",
-          "listProfiles": "Profils vocaux disponibles."
+          "listProfiles": "Profils vocaux disponibles.",
+          "speechSessions": "Sessions de lecture incrémentale pour le texte en flux."
         },
-        "postSpeak": "Également accessible via <code>POST /speak</code> pour les scripts shell, ACP, A2A."
+        "agentBridge": "<code>speech_*</code> alimente la narration automatique locale ; c'est séparé de la configuration MCP.",
+        "postSpeak": "Également accessible via <code>POST /speak</code> et <code>/speak/sessions</code> pour les clients loopback."
       }
     },
     "gpu": {
