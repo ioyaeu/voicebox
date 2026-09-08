@@ -152,6 +152,12 @@ latency. Main-window manual playback remains independent of the pill.
 
 ## Next Phase
 
+The first local macOS adapter prototype is described in
+[VS Code Agent Voice Bridge](VSCODE_AGENT_VOICE_BRIDGE.md). It preserves the
+official panels using Claude's process wrapper and an explicitly experimental
+Codex executable override. Its installation and listening gates are separate
+from the session service tests below.
+
 1. Add an example host adapter for an actual public agent text-event API.
    Forward answer text only, preserve turn ids, propagate stop/barging-in, and
    test reconnect without duplicate speech. Keep host-specific policy outside
