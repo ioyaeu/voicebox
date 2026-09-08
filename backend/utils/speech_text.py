@@ -13,8 +13,6 @@ from __future__ import annotations
 
 import re
 
-from .chunked_tts import split_text_into_chunks
-
 # Below this the sentence-boundary cut degenerates into word salad.
 MIN_MAX_CHARS = 50
 MAX_MAX_CHARS = 10000
@@ -93,6 +91,8 @@ def truncate_for_speech(text: str, max_chars: int) -> str:
     a chunk boundary would — sentence end, then clause, then whitespace —
     and never inside ``127.0.0.1`` or a ``[tag]``.
     """
+    from .chunked_tts import split_text_into_chunks
+
     if max_chars < MIN_MAX_CHARS:
         raise ValueError(f"max_chars must be at least {MIN_MAX_CHARS}")
     text = text.strip()
