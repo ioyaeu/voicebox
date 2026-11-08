@@ -30,7 +30,7 @@ def resolve_profile(
     if client_id:
         # Per-client binding. Imported lazily so this module stays importable
         # even before the migration adds the table on first boot.
-        from ..database.models import MCPClientBinding  # noqa: WPS433
+        from ..database.models import MCPClientBinding
 
         binding = (
             db.query(MCPClientBinding)
@@ -55,17 +55,24 @@ def resolve_profile(
 def resolve_bound_engine(explicit_engine: str | None, binding_engine: str | None, profile) -> str | None:
     """Resolve an agent engine without overriding profile-owned engines.
 
-    Preset profiles and RVC profiles carry their engine in the profile itself.
-    A binding default is useful for cloned/designed profiles, but applying it
-    to a selected preset or RVC profile creates an invalid voice/engine pair.
-    An explicit tool/request engine remains authoritative so the generation
-    route can return its normal validation error for an intentional conflict.
+    Every profile may own an engine: preset/RVC profiles encode it in their
+    voice metadata, while cloned/designed profiles store it as ``default_engine``.
+    A binding default fills the gap only when the selected profile has no engine
+    of its own. An explicit tool/request engine remains authoritative so the
+    generation route can return its normal validation error for an intentional
+    conflict.
     """
     if explicit_engine is not None:
         return explicit_engine
-    if getattr(profile, "voice_type", None) in {"preset", "rvc"}:
+
+    voice_type = getattr(profile, "voice_type", None)
+    if voice_type in {"preset", "rvc"}:
+        # Let the generation route resolve the intrinsic preset/RVC engine and
+        # validate it against the selected profile.
         return None
-    return binding_engine
+
+    profile_engine = getattr(profile, "default_engine", None)
+    return profile_engine or binding_engine
 
 
 def with_db() -> Session:

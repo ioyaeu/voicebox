@@ -17,12 +17,14 @@ Mode differences:
 from __future__ import annotations
 
 import asyncio
+import sys
 import traceback
 from typing import Literal, Optional
 
 from .. import config
 from . import history, profiles
 from ..database import get_db
+from ..utils.frozen import describe_failure
 from ..utils.tasks import get_task_manager
 
 
@@ -182,11 +184,16 @@ async def run_generation(
         _notify_speak_end(generation_id, status="cancelled")
     except Exception as e:
         traceback.print_exc()
+        # A rebuilt/re-bundled frozen binary makes deferred imports fail with a
+        # bare zlib/ImportError; name the real cause in the stored error.
+        error = describe_failure(e)
+        if error != str(e):
+            print(error, file=sys.stderr)
         await history.update_generation_status(
             generation_id=generation_id,
             status="failed",
             db=bg_db,
-            error=str(e),
+            error=error,
         )
         _notify_speak_end(generation_id, status="failed")
     else:

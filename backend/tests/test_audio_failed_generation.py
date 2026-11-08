@@ -11,6 +11,7 @@ Usage:
     python -m pytest backend/tests/test_audio_failed_generation.py -v
 """
 
+import json
 import sys
 from pathlib import Path
 
@@ -34,6 +35,7 @@ from backend.database import (
     get_db,
 )
 from backend.routes.audio import router as audio_router
+from backend.routes.generations import router as generations_router
 
 
 def test_resolve_storage_path_empty_returns_none():
@@ -50,6 +52,9 @@ def client(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "_data_dir", tmp_path)
     # An existing directory that a stored audio_path may wrongly point to.
     (tmp_path / "somedir").mkdir()
+    audio_dir = tmp_path / "generations"
+    audio_dir.mkdir()
+    (audio_dir / "ok.wav").write_bytes(b"audio")
 
     engine = create_engine(
         f"sqlite:///{tmp_path / 'test.db'}",
@@ -93,6 +98,13 @@ def client(tmp_path, monkeypatch):
                 audio_path="somedir",
                 status="completed",
             ),
+            Generation(
+                id="gen-completed-file",
+                profile_id="profile-1",
+                text="completed generation",
+                audio_path="generations/ok.wav",
+                status="completed",
+            ),
             GenerationVersion(
                 id="version-dir",
                 generation_id="gen-with-version",
@@ -112,6 +124,7 @@ def client(tmp_path, monkeypatch):
 
     app = FastAPI()
     app.include_router(audio_router)
+    app.include_router(generations_router)
 
     def override_get_db():
         db = testing_session_local()
@@ -143,6 +156,15 @@ def test_unknown_generation_returns_404(client):
     response = client.get("/audio/no-such-generation")
     assert response.status_code == 404
     assert response.json()["detail"] == "Generation not found"
+
+
+def test_generation_status_exposes_available_audio_path(client):
+    response = client.get("/generate/gen-completed-file/status")
+    assert response.status_code == 200
+    line = next(line for line in response.text.splitlines() if line.startswith("data: "))
+    payload = json.loads(line.removeprefix("data: "))
+    assert payload["status"] == "completed"
+    assert payload["audio_path"] == "generations/ok.wav"
 
 
 @pytest.mark.parametrize(

@@ -109,6 +109,22 @@ def _bind_mismatched_voxtral_preset(db) -> None:
     db.commit()
 
 
+def _bind_mismatched_chatterbox_profile(db) -> None:
+    """Create a cloned profile whose engine must beat the client default."""
+    db.add(
+        VoiceProfile(
+            id="p3",
+            name="Claude Chatterbox",
+            language="fr",
+            voice_type="cloned",
+            default_engine="chatterbox",
+        )
+    )
+    binding = db.query(MCPClientBinding).filter_by(client_id=CLIENT).one()
+    binding.default_engine = "kokoro"
+    db.commit()
+
+
 # ── REST /speak ────────────────────────────────────────────────────────────
 
 
@@ -139,6 +155,19 @@ async def test_rest_profile_engine_beats_binding_default(db, captured_generation
     # None lets the generation route resolve the preset's intrinsic Voxtral
     # engine instead of applying the binding's unrelated Kokoro preference.
     assert captured_generation["req"].engine is None
+
+
+@pytest.mark.asyncio
+async def test_rest_cloned_profile_engine_beats_binding_default(db, captured_generation):
+    _bind_mismatched_chatterbox_profile(db)
+
+    await speak(
+        models.SpeakRequest(text="Use the cloned profile.", profile="Claude Chatterbox"),
+        _rest_request(),
+        db,
+    )
+
+    assert captured_generation["req"].engine == "chatterbox"
 
 
 @pytest.mark.asyncio
@@ -224,6 +253,18 @@ async def test_tool_profile_engine_beats_binding_default(db, mcp, captured_speak
     )
 
     assert captured_speak["engine"] is None
+
+
+@pytest.mark.asyncio
+async def test_tool_cloned_profile_engine_beats_binding_default(db, mcp, captured_speak, as_client):
+    _bind_mismatched_chatterbox_profile(db)
+
+    await mcp.call_tool(
+        "voicebox.speak",
+        {"text": "Use the cloned profile.", "profile": "Claude Chatterbox"},
+    )
+
+    assert captured_speak["engine"] == "chatterbox"
 
 
 @pytest.mark.asyncio

@@ -8,6 +8,15 @@ PLATFORM=$(rustc --print host-tuple 2>/dev/null || echo "unknown")
 
 echo "Building Voicebox sidecars for platform: $PLATFORM"
 
+# A running packaged server keeps its PyInstaller archive open *by path*. This
+# script overwrites tauri/src-tauri/binaries and `tauri build` then rewrites the
+# .app, so every deferred import in the live process fails afterwards with
+# "zlib.error: Error -3 while decompressing data". Warn so the dev relaunches it.
+if pgrep -f "voicebox-server .*--parent-pid" >/dev/null 2>&1; then
+    echo "WARNING: a packaged Voicebox server is running. It will break as soon as its"
+    echo "         binary is overwritten by this build. Quit and relaunch Voicebox afterwards."
+fi
+
 # Build Python binary
 # Resolve PATH to absolute paths before changing directory
 export PATH="$(cd "$(dirname "$0")/.." && pwd)/backend/venv/bin:$PATH"

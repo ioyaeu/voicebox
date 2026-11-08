@@ -10,8 +10,8 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
 from .. import config, models
-from ..services import history, personality, profiles, tts
 from ..database import Generation as DBGeneration, VoiceProfile as DBVoiceProfile, get_db
+from ..services import history, personality, profiles, tts
 from ..services.generation import run_generation
 from ..services.task_queue import cancel_generation as cancel_generation_job, enqueue_generation
 from ..utils.audio import load_audio
@@ -334,6 +334,7 @@ async def get_generation_status(generation_id: str, db: Session = Depends(get_db
                     "status": gen.status or "completed",
                     "duration": gen.duration,
                     "error": gen.error,
+                    "audio_path": history.get_available_audio_path(gen.audio_path),
                     "keep_audio": bool(gen.keep_audio),
                     # Agent-originated sources ("mcp", "rest") skip main-window
                     # autoplay — the floating pill plays those directly.
