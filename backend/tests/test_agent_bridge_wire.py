@@ -10,18 +10,38 @@ import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
+import pytest
 
-def test_live_agent_pipe_to_session_with_ide_bytes_unchanged():
+
+@pytest.mark.parametrize("keep", [False, True])
+@pytest.mark.parametrize("start_failure", ["slow", "lost"])
+def test_live_agent_pipe_to_session_with_ide_bytes_unchanged(keep, start_failure):
     calls = []
     finished = threading.Event()
+    session_id = None
+    starts = 0
 
     class Handler(BaseHTTPRequestHandler):
         def do_POST(self):
+            nonlocal session_id, starts
             data = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
             calls.append((self.path, data, self.headers.get("X-Voicebox-Client-Id")))
+            if self.path == "/speak/sessions":
+                starts += 1
+                if session_id is not None and session_id != data.get("request_id"):
+                    self.send_error(409)
+                    return
+                session_id = data.get("request_id", "legacy")
+                if starts == 1:
+                    if start_failure == "lost":
+                        # Creation succeeds, but the connection closes before
+                        # the producer receives the session id.
+                        self.close_connection = True
+                        return
+                    time.sleep(2.2)
             if self.path.endswith("/finish"):
                 finished.set()
-            self.reply({"session_id": "s", "state": "draining"})
+            self.reply({"session_id": session_id, "state": "draining"})
 
         def do_GET(self):
             self.reply({"state": "completed" if finished.is_set() else "accepting"})
@@ -83,7 +103,10 @@ def test_live_agent_pipe_to_session_with_ide_bytes_unchanged():
     reader = threading.Thread(target=read_output, daemon=True)
     reader.start()
     try:
-        prompt = {"type": "user", "message": {"role": "user", "content": "keep audio, test the bridge"}}
+        prompt = {
+            "type": "user",
+            "message": {"role": "user", "content": "keep audio, test the bridge" if keep else "test the bridge"},
+        }
         process.stdin.write(json.dumps(prompt).encode() + b"\n")
         process.stdin.flush()
         assert finished.wait(5), calls
@@ -91,7 +114,8 @@ def test_live_agent_pipe_to_session_with_ide_bytes_unchanged():
         while len(output) < len(raw) and time.monotonic() < deadline:
             time.sleep(0.01)
         assert bytes(output) == raw
-        assert calls[0][1] == {"keep_audio": True}
+        assert calls[0][1] == {"keep_audio": keep, "request_id": session_id}
+        assert starts == (2 if start_failure == "lost" else 1)
         assert all(client == "claude-code" for _, _, client in calls)
         spoken = "".join(data["text"] for endpoint, data, _ in calls if endpoint.endswith("/append"))
         assert spoken == "Une réponse publique.\n"

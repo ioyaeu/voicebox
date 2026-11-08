@@ -211,7 +211,7 @@ def test_narrator_retries_same_sequence_and_keep_without_blocking_producer():
         wait_for(lambda: any(path.endswith("/finish") for path, _ in client.calls))
         appends = [data for path, data in client.calls if path.endswith("/append")]
         assert appends == [{"sequence": 0, "text": "First phrase."}] * 2
-        assert client.calls[0] == ("", {"keep_audio": True})
+        assert client.calls[0] == ("", {"keep_audio": True, "request_id": narrator.current.request_id})
         narrator.cancel()
         wait_for(lambda: any(path.endswith("/cancel") for path, _ in client.calls))
     finally:
@@ -270,6 +270,35 @@ def test_process_relay_preserves_bytes_stderr_and_exit_code():
     assert result.stdout == payload + b"\xff\x00\n"
     assert b"child stderr" in result.stderr
     assert b"not speech" not in result.stderr
+
+
+def test_cancel_after_lost_start_cleans_known_session_without_sending_text():
+    entered, release = threading.Event(), threading.Event()
+    calls = []
+
+    class LostStartClient:
+        def request(self, path, data=None):
+            calls.append((path, data))
+            if path == "":
+                entered.set()
+                assert release.wait(2)
+                raise TimeoutError("response lost after session creation")
+            return {"state": "cancelled"}
+
+    narrator = Narrator(LostStartClient(), lambda _: None)
+    try:
+        narrator.begin()
+        narrator.append("Hello.")
+        assert entered.wait(1)
+        request_id = calls[0][1]["request_id"]
+        narrator.cancel()
+        release.set()
+        wait_for(lambda: any(path.endswith("/cancel") for path, _ in calls))
+        assert calls[-1] == (f"/{request_id}/cancel", {})
+        assert not any(path.endswith("/append") for path, _ in calls)
+    finally:
+        release.set()
+        narrator.close()
 
 
 def test_codex_binary_follows_extension_registry(tmp_path):

@@ -8,8 +8,10 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+import uuid
 from collections import deque
 from dataclasses import dataclass, field
+from http.client import HTTPException
 
 
 class HTTPError(Exception):
@@ -19,7 +21,7 @@ class HTTPError(Exception):
 
 
 class Client:
-    def __init__(self, base="http://127.0.0.1:17493", client="codex", timeout=2):
+    def __init__(self, base="http://127.0.0.1:17493", client="codex", timeout=15):
         url = urllib.parse.urlsplit(base)
         if (
             url.scheme != "http"
@@ -55,6 +57,7 @@ class Client:
 @dataclass
 class Turn:
     keep: bool
+    request_id: str = field(default_factory=lambda: str(uuid.uuid4()))
     pending: deque = field(default_factory=deque)
     chars: int = 0
     finished: bool = False
@@ -120,15 +123,15 @@ class Narrator:
 
     def _request(self, turn, path, data=None):
         deadline = time.monotonic() + 120
-        network_deadline = time.monotonic() + 10
+        network_deadline = time.monotonic() + 45
         while self._alive(turn):
             try:
                 return self.client.request(path, data)
             except HTTPError as exc:
                 if exc.status != 429:
                     raise
-            except (OSError, ValueError):
-                # Safe only for append/finish/status: the same sequence is retried.
+            except (OSError, ValueError, HTTPException):
+                # Start reuses its request id; append reuses its sequence/text.
                 if time.monotonic() > network_deadline:
                     raise
             if time.monotonic() > deadline:
@@ -140,6 +143,9 @@ class Narrator:
         if session_id:
             try:
                 self.client.request(f"/{session_id}/cancel", {})
+            except HTTPError as exc:
+                if exc.status != 404:
+                    self.log("could not cancel audio; server lease expiry will clean it up")
             except Exception:
                 self.log("could not cancel audio; server lease expiry will clean it up")
 
@@ -148,9 +154,12 @@ class Narrator:
         session_id = None
         sequence = 0
         finished = False
+        operation = "start"
         while True:
             if turn is not None and not self._alive(turn):
-                self._cancel_session(session_id)
+                # The request id is also the session id, even if the start
+                # response was lost. Never leave an empty session owning audio.
+                self._cancel_session(session_id or turn.request_id)
                 turn, session_id = None, None
             if self.closed:
                 return
@@ -165,15 +174,17 @@ class Narrator:
                     continue
             try:
                 if session_id is None:
-                    # A lost start response is NOT retried: that could create a
-                    # second reader. The orphan, if any, expires on the server.
-                    response = self.client.request("", {"keep_audio": turn.keep})
+                    operation = "start"
+                    response = self._request(turn, "", {"keep_audio": turn.keep, "request_id": turn.request_id})
+                    if response is None:
+                        continue
                     session_id = response["session_id"]
                 if not self._alive(turn):
                     continue
                 with self.condition:
                     text = turn.pending.popleft() if turn.pending else ""
                 if text:
+                    operation = "append"
                     for offset in range(0, len(text), 256):
                         part = text[offset : offset + 256]
                         response = self._request(turn, f"/{session_id}/append", {"sequence": sequence, "text": part})
@@ -184,19 +195,23 @@ class Narrator:
                             turn.chars -= len(part)
                     continue
                 if turn.finished and not finished:
+                    operation = "finish"
                     self._request(turn, f"/{session_id}/finish", {})
                     finished = True
+                operation = "status"
                 response = self._request(turn, f"/{session_id}")
                 if response and response["state"] in {"completed", "cancelled", "failed"}:
                     if response["state"] == "failed":
                         self.log("Voicebox reported failed playback; this turn is silent")
                     turn.disabled = True
+                    turn = None
                     session_id = None
                 self._wait(0.5)
             except Exception as exc:
                 # No prompt, answer, tool data or backend error body is logged.
                 self.log(
-                    f"narration unavailable ({type(exc).__name__}: {getattr(exc, 'status', 'local error')}); IDE unaffected"
+                    f"narration unavailable during {operation} "
+                    f"({type(exc).__name__}: {getattr(exc, 'status', 'local error')}); IDE unaffected"
                 )
                 turn.disabled = True
                 turn.pending.clear()

@@ -138,9 +138,14 @@ retention on. Voicebox stores kept phrases separately, not as a joined export.
 
 HTTP traffic is restricted to loopback without environment proxies or
 redirects. No credentials or cloud endpoints are introduced. Only bounded
-public prose leaves the relay for Voicebox. Append retries reuse sequence and
-text; the start request is not blindly retried after a lost response. A lost
-start reply may leave an orphan until the server's renderer lease expires.
+public prose leaves the relay for Voicebox. Requests allow 15 seconds for the
+local backend to respond, with a bounded 45-second network recovery budget.
+Append retries reuse sequence and text. Start retries reuse a random UUID
+`request_id`, which is also the session id: a lost reply recovers the same
+session, without resolving another voice or creating a duplicate reader.
+Cancellation can address this id even before the start reply arrives.
+Update both the backend and the installed bridge runtime for this contract;
+rebuilding Voicebox alone does not update the per-user Python wrapper.
 
 Voicebox currently permits only one global speech session. A second busy agent
 is not queued indefinitely: its narration fails for that turn, without
