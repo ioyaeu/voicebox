@@ -21,10 +21,20 @@
 # still builds and runs). Signed release artifacts are produced by CI /
 # scripts/prepare-release.sh, which is where the real key lives.
 #
+# macOS code signing (production): the .app is signed with a STABLE local
+# identity, "Voicebox Local" by default (a self-signed "Code Signing" certificate
+# in the login keychain). macOS ties Accessibility (auto-paste) and Input
+# Monitoring (global shortcut) grants to the app's signature; an unsigned/ad-hoc
+# build is identified by its binary hash, which changes on every build, so those
+# grants silently stop matching after each rebuild. A stable identity keeps them.
+# APPLE_SIGNING_IDENTITY (Tauri's own variable) or --sign-identity override the
+# default. If the identity is not in the keychain the build falls back to ad-hoc
+# signing with a warning.
+#
 # Usage:
 #   scripts/build-and-run.sh [--dev] [--rebuild-server | --reuse-server]
 #                            [--host H] [--port P] [--data-dir DIR]
-#                            [--no-open] [-h|--help]
+#                            [--sign-identity NAME] [--no-open] [-h|--help]
 #
 # Options:
 #   --dev             Dev mode (backend + tauri dev) instead of a production build
@@ -34,6 +44,9 @@
 #   --host H          (dev) backend bind address (default 127.0.0.1)
 #   --port P          (dev) backend port (default 17493)
 #   --data-dir DIR    (dev) data dir for the DB / profiles / generated audio
+#   --sign-identity NAME
+#                     (production, macOS) code-signing identity: certificate name
+#                     or SHA-1 (default: $APPLE_SIGNING_IDENTITY, else "Voicebox Local")
 #   --no-open         (production) build the .app but don't launch it
 #   -h, --help        Show this help
 
@@ -53,6 +66,7 @@ NO_OPEN=0
 HOST="127.0.0.1"
 PORT="17493"
 DATA_DIR=""
+SIGN_IDENTITY="${APPLE_SIGNING_IDENTITY:-Voicebox Local}"
 
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -63,6 +77,7 @@ while [ $# -gt 0 ]; do
         --host) HOST="$2"; shift 2 ;;
         --port) PORT="$2"; shift 2 ;;
         --data-dir) DATA_DIR="$2"; shift 2 ;;
+        --sign-identity) SIGN_IDENTITY="$2"; shift 2 ;;
         -h|--help) sed -n '2,/^set -euo/p' "$0" | sed '$d' | sed 's/^# \{0,1\}//'; exit 0 ;;
         *) echo "Unknown option: $1 (see --help)" >&2; exit 2 ;;
     esac
@@ -158,6 +173,25 @@ if [ -z "${TAURI_SIGNING_PRIVATE_KEY:-}" ] && [ -f "$HOME/.tauri/voicebox.key" ]
     export TAURI_SIGNING_PRIVATE_KEY_PASSWORD="${TAURI_SIGNING_PRIVATE_KEY_PASSWORD:-}"
 fi
 
+# Sign the .app with a stable identity so macOS keeps the Accessibility / Input
+# Monitoring grants across rebuilds (see header). Tauri signs the sidecars and
+# the bundle itself when APPLE_SIGNING_IDENTITY is set. `find-identity` runs
+# without -v on purpose: a self-signed certificate is reported as "not trusted"
+# (hence not "valid") yet codesign signs with it fine.
+if [ "$(uname)" = "Darwin" ]; then
+    identities="$(security find-identity -p codesigning 2>/dev/null || true)"
+    if grep -qF -e "\"$SIGN_IDENTITY\"" -e " $SIGN_IDENTITY " <<<"$identities"; then
+        export APPLE_SIGNING_IDENTITY="$SIGN_IDENTITY"
+        echo "Code signing the app with: $APPLE_SIGNING_IDENTITY"
+    else
+        unset APPLE_SIGNING_IDENTITY
+        echo "WARNING: code-signing identity \"$SIGN_IDENTITY\" not found in the keychain — the app"
+        echo "         will be ad-hoc signed, and macOS will drop its Accessibility / Input Monitoring"
+        echo "         permissions after each rebuild. Create it in Keychain Access > Certificate"
+        echo "         Assistant > Create a Certificate (type: Code Signing), or pass --sign-identity."
+    fi
+fi
+
 if [ -n "${TAURI_SIGNING_PRIVATE_KEY:-}" ]; then
     echo "Building the Voicebox desktop app (tauri build, signing updater artifacts) ..."
     ( cd tauri && bun run tauri build )
@@ -168,6 +202,19 @@ else
 fi
 
 APP="tauri/src-tauri/target/release/bundle/macos/Voicebox.app"
+
+# Report how macOS will identify the app: a `cdhash` requirement means the
+# permissions granted to a previous build will not carry over to this one.
+if [ "$(uname)" = "Darwin" ] && [ -d "$APP" ]; then
+    # Ad-hoc signatures print the implicit requirement commented out: "# designated => cdhash ..."
+    designated="$(codesign -d -r- "$APP" 2>&1 | sed -n 's/^#* *designated => //p' || true)"
+    case "$designated" in
+        cdhash*) echo "WARNING: $APP is ad-hoc signed ($designated) — re-grant permissions after each build." ;;
+        "")      echo "WARNING: could not read the code signature of $APP." ;;
+        *)       echo "Signature requirement: $designated" ;;
+    esac
+fi
+
 if [ "$NO_OPEN" -eq 1 ]; then
     echo "Built. App bundle: $APP  (not launched; --no-open)"
 elif [ -d "$APP" ]; then

@@ -115,6 +115,23 @@ just build-server
 
 This makes PyInstaller use your local qwen-tts version instead of the pip-installed package.
 
+**macOS: build and run with a stable signature (`scripts/build-and-run.sh`):**
+
+`scripts/build-and-run.sh` builds the desktop app, rebuilding the backend sidecar when backend code has changed, then launches it. Run it with `--help` for the options; `--dev` starts the backend and `tauri dev` instead.
+
+macOS ties the Accessibility (auto-paste) and Input Monitoring (global shortcut) permissions to the app's code signature. An unsigned build is identified by the hash of its binary, which changes on every build: System Settings still shows Voicebox as allowed, but the new build is denied. To keep the permissions across rebuilds, the script signs the app with a stable local identity, `Voicebox Local` by default:
+
+1. Create the certificate once: Keychain Access → Certificate Assistant → Create a Certificate…, name `Voicebox Local`, identity type *Self-Signed Root*, certificate type *Code Signing*. Keychain Access marks it as not trusted; signing works anyway.
+2. Run `scripts/build-and-run.sh`. The output should show `Signature requirement: identifier … and certificate leaf = H"…"`. A `cdhash` warning means the app was not signed with the certificate.
+3. After the first signed build, quit Voicebox, clear the permissions left by unsigned builds, relaunch the app and grant both permissions again:
+
+   ```bash
+   tccutil reset Accessibility sh.voicebox.app
+   tccutil reset ListenEvent sh.voicebox.app
+   ```
+
+Later rebuilds keep the permissions. To sign with another certificate, pass `--sign-identity NAME` or set `APPLE_SIGNING_IDENTITY`. If the certificate is missing, the script falls back to an unsigned (ad-hoc) build and prints a warning.
+
 ### Generate OpenAPI Client
 
 After starting the backend server:
