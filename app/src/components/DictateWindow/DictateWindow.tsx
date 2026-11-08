@@ -6,6 +6,7 @@ import { apiClient } from '@/lib/api/client';
 import type { FocusSnapshot } from '@/lib/api/types';
 import { useCaptureRecordingSession } from '@/lib/hooks/useCaptureRecordingSession';
 import { useSpeechSession } from '@/lib/hooks/useSpeechSession';
+import { guardAudioForPlayback, makeRetryOrDismiss, SPEAK_PLAYBACK_RETRY_DELAYS_MS } from '@/lib/audio/speechPlaybackRetry';
 
 /**
  * Floating dictate surface shown in a separate transparent Tauri window.
@@ -124,6 +125,7 @@ export function DictateWindow() {
   speakingRef.current = speaking;
   const statusSourceRef = useRef<EventSource | null>(null);
   const statusTimeoutRef = useRef<number | null>(null);
+  const playbackRetryRef = useRef<number | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
 
   const deleteEphemeralGeneration = (generationId: string, keepAudio: boolean) => {
@@ -140,6 +142,23 @@ export function DictateWindow() {
     }
   };
 
+  const clearPlaybackRetry = () => {
+    if (playbackRetryRef.current !== null) {
+      window.clearTimeout(playbackRetryRef.current);
+      playbackRetryRef.current = null;
+    }
+  };
+
+  const releaseSpeakAudio = () => {
+    if (!audioRef.current) return;
+    audioRef.current.onended = null;
+    audioRef.current.onerror = null;
+    audioRef.current.onplaying = null;
+    audioRef.current.pause();
+    audioRef.current.src = '';
+    audioRef.current = null;
+  };
+
   const dismissSpeak = (id?: string) => {
     // Guard against a late dismiss targeting a stale cycle (a new speak
     // already started by the time audio.ended from the previous one fired).
@@ -147,14 +166,8 @@ export function DictateWindow() {
     statusSourceRef.current?.close();
     statusSourceRef.current = null;
     clearStatusTimeout();
-    if (audioRef.current) {
-      audioRef.current.onended = null;
-      audioRef.current.onerror = null;
-      audioRef.current.onplaying = null;
-      audioRef.current.pause();
-      audioRef.current.src = '';
-      audioRef.current = null;
-    }
+    clearPlaybackRetry();
+    releaseSpeakAudio();
     setSpeaking(null);
     speakingRef.current = null;
   };
@@ -163,22 +176,36 @@ export function DictateWindow() {
   const streamActiveRef = useRef(false);
   streamActiveRef.current = speechSession.active;
 
-  const startSpeakPlayback = (generationId: string, keepAudio: boolean) => {
+  const startSpeakPlayback = (generationId: string, keepAudio: boolean, attempt = 0) => {
     if (speakingRef.current?.generationId !== generationId || audioRef.current) return;
     const audio = new Audio(apiClient.getAudioUrl(generationId));
+    let started = false;
+    const retryOrDismiss = makeRetryOrDismiss({
+      generationId,
+      keepAudio,
+      attempt,
+      started: () => started,
+      release: releaseSpeakAudio,
+      retry: () => {
+        if (speakingRef.current?.generationId !== generationId) return;
+        playbackRetryRef.current = window.setTimeout(() => {
+          playbackRetryRef.current = null;
+          startSpeakPlayback(generationId, keepAudio, attempt + 1);
+        }, SPEAK_PLAYBACK_RETRY_DELAYS_MS[attempt]);
+      },
+      dismiss: () => dismissSpeak(generationId),
+    });
     audio.onended = () => {
       dismissSpeak(generationId);
       deleteEphemeralGeneration(generationId, keepAudio);
     };
-    audio.onerror = () => {
-      dismissSpeak(generationId);
-      deleteEphemeralGeneration(generationId, keepAudio);
-    };
+    audio.onerror = retryOrDismiss;
     // The pill window stays hidden through the ~1 s generation wait so the
     // user doesn't see a silent pill. We surface it the moment audio
     // actually starts playing, and that's also when the elapsed counter
     // arms.
     audio.onplaying = () => {
+      started = true;
       emit('dictate:show').catch(() => {});
       setSpeaking((prev) =>
         prev && prev.generationId === generationId ? { ...prev, startedAt: Date.now() } : prev,
@@ -188,8 +215,7 @@ export function DictateWindow() {
     audioRef.current = audio;
     audio.play().catch((err) => {
       console.warn('[dictate] audio.play failed:', err);
-      dismissSpeak(generationId);
-      deleteEphemeralGeneration(generationId, keepAudio);
+      retryOrDismiss();
     });
   };
 
@@ -236,7 +262,11 @@ export function DictateWindow() {
         }, 60_000);
         source.onmessage = (msg) => {
           try {
-            const data = JSON.parse(msg.data) as { status?: string; keep_audio?: boolean };
+            const data = JSON.parse(msg.data) as {
+              status?: string;
+              keep_audio?: boolean;
+              audio_path?: string | null;
+            };
             if (data.status === 'completed') {
               clearStatusTimeout();
               source.close();
@@ -245,7 +275,11 @@ export function DictateWindow() {
               setSpeaking((prev) =>
                 prev && prev.generationId === id ? { ...prev, keepAudio } : prev,
               );
-              startSpeakPlayback(id, keepAudio);
+              if (!guardAudioForPlayback(data.audio_path)) {
+                dismissSpeak(id);
+              } else {
+                startSpeakPlayback(id, keepAudio);
+              }
             } else if (data.status === 'failed' || data.status === 'not_found') {
               clearStatusTimeout();
               source.close();
@@ -352,6 +386,7 @@ export function DictateWindow() {
           }
           onPause={speechSession.active ? speechSession.togglePause : undefined}
           paused={speechSession.paused}
+          speechStatus={speechSession.active ? speechSession.status : undefined}
         />
       ) : null}
     </div>

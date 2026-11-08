@@ -1,7 +1,8 @@
 import { describe, expect, test } from 'bun:test';
 import {
-  SpeechSessionPlayer,
   type PlaybackUpdate,
+  type SpeechPlaybackStatus,
+  SpeechSessionPlayer,
   type SpeechSnapshot,
 } from '../src/lib/audio/speechSessionPlayer';
 
@@ -9,6 +10,9 @@ class FakeAudio {
   currentTime = 4;
   onended: (() => void) | null = null;
   onerror: (() => void) | null = null;
+  onplaying: (() => void) | null = null;
+  onwaiting: (() => void) | null = null;
+  onpause: (() => void) | null = null;
   plays = 0;
   pauses = 0;
   async play() {
@@ -16,6 +20,7 @@ class FakeAudio {
   }
   pause() {
     this.pauses++;
+    this.onpause?.();
   }
   removeAttribute() {}
   load() {}
@@ -30,6 +35,52 @@ const snapshot = (sequence = 0): SpeechSnapshot => ({
 });
 
 describe('ordered speech playback', () => {
+  test('speaking follows media playback, not an open session or pending generation', async () => {
+    let server: SpeechSnapshot = { ...snapshot(), ready: [], generating: false };
+    const states: { status: SpeechPlaybackStatus; elapsedMs: number; paused: boolean }[] = [];
+    const audio = new FakeAudio();
+    audio.currentTime = 0;
+    const player = new SpeechSessionPlayer({
+      exchange: async () => server,
+      audio: () => audio as unknown as HTMLAudioElement,
+      changed: (state) => states.push(state),
+    });
+    try {
+      player.start();
+      await settle();
+      expect(states.at(-1)?.status).toBe('waiting');
+      expect(audio.plays).toBe(0);
+      server = { ...server, generating: true };
+      player.start();
+      await settle();
+      expect(states.at(-1)?.status).toBe('generating');
+      expect(audio.plays).toBe(0);
+      server = { ...snapshot(), generating: false };
+      player.start();
+      await settle();
+      expect(states.at(-1)?.status).toBe('generating');
+      audio.onplaying!();
+      expect(states.at(-1)?.status).toBe('playing');
+      audio.onwaiting!();
+      expect(states.at(-1)?.status).toBe('generating');
+      audio.onplaying!();
+      player.togglePause();
+      expect(states.at(-1)?.paused).toBe(true);
+      expect(states.at(-1)?.status).not.toBe('playing');
+      player.togglePause();
+      audio.onplaying!();
+      server = { ...server, ready: [] };
+      audio.currentTime = 3;
+      audio.onended!();
+      await settle();
+      expect(states.at(-1)?.status).toBe('waiting');
+      expect(states.at(-1)?.elapsedMs).toBe(3000);
+      expect(audio.onplaying).toBeNull();
+    } finally {
+      player.dispose();
+    }
+  });
+
   test('pause does not acknowledge, and ended advances exactly once', async () => {
     const updates: PlaybackUpdate[] = [];
     const audios: FakeAudio[] = [];

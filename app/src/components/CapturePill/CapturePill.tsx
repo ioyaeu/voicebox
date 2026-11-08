@@ -1,6 +1,7 @@
 import { motion } from 'framer-motion';
 import { AlertCircle, Pause, Play, Square } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
+import type { SpeechPlaybackStatus } from '@/lib/audio/speechSessionPlayer';
 import { cn } from '@/lib/utils/cn';
 
 /**
@@ -77,6 +78,7 @@ export function CapturePill({
   onStop,
   onPause,
   paused = false,
+  speechStatus,
   errorMessage,
   onDismiss,
   className,
@@ -86,6 +88,7 @@ export function CapturePill({
   onStop?: () => void;
   onPause?: () => void;
   paused?: boolean;
+  speechStatus?: SpeechPlaybackStatus;
   errorMessage?: string | null;
   onDismiss?: () => void;
   className?: string;
@@ -103,8 +106,26 @@ export function CapturePill({
   }
 
   const visible = state !== 'rest';
-  const labelText = t(state === 'rest' ? PILL_LABEL_KEYS.recording : PILL_LABEL_KEYS[state]);
-  const barMode = paused ? 'idle' : barModeFor(state);
+  const speechLabel = paused
+    ? 'captures.pill.paused'
+    : speechStatus === 'waiting'
+      ? 'captures.pill.waitingForText'
+      : speechStatus === 'generating'
+        ? 'captures.pill.preparingAudio'
+        : PILL_LABEL_KEYS.speaking;
+  const labelText = t(
+    state === 'speaking' && speechStatus
+      ? speechLabel
+      : state === 'rest'
+        ? PILL_LABEL_KEYS.recording
+        : PILL_LABEL_KEYS[state],
+  );
+  const barMode =
+    paused || speechStatus === 'waiting'
+      ? 'idle'
+      : speechStatus === 'generating'
+        ? 'generating'
+        : barModeFor(state);
 
   const dot = (
     <span className="relative flex h-2 w-2 shrink-0">
@@ -170,7 +191,11 @@ export function CapturePill({
           <Square className="h-3 w-3" />
         </button>
       )}
-      <span className="text-sm font-medium shrink-0" style={{ minWidth: '104px' }}>
+      <span
+        className="text-sm font-medium shrink-0 truncate"
+        style={speechStatus ? { width: '136px' } : { minWidth: '104px' }}
+        title={labelText}
+      >
         {labelText}
       </span>
       <PillAudioBars mode={barMode} />

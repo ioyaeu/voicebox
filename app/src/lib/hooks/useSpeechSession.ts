@@ -1,11 +1,12 @@
 import { emit, listen } from '@tauri-apps/api/event';
 import { useEffect, useRef, useState } from 'react';
 import { apiClient } from '@/lib/api/client';
-import { SpeechSessionPlayer } from '@/lib/audio/speechSessionPlayer';
+import { type SpeechPlaybackStatus, SpeechSessionPlayer } from '@/lib/audio/speechSessionPlayer';
 
 export function useSpeechSession(onStart: () => void) {
   const [state, setState] = useState({
     active: false,
+    status: 'waiting' as SpeechPlaybackStatus,
     paused: false,
     elapsedMs: 0,
     error: null as string | null,
@@ -35,7 +36,7 @@ export function useSpeechSession(onStart: () => void) {
       currentId = id;
       player.current?.dispose();
       startRef.current();
-      setState({ active: true, paused: false, elapsedMs: 0, error: null });
+      setState({ active: true, status: 'waiting', paused: false, elapsedMs: 0, error: null });
       emit('dictate:show').catch(() => {});
       const next = new SpeechSessionPlayer({
         exchange: (update) => apiClient.speechPlayback(id, update),

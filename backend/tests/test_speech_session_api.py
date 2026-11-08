@@ -1,5 +1,7 @@
 """Exercise real voice resolution, REST and MCP against isolated SQLite."""
 
+from uuid import uuid4
+
 import httpx
 import pytest
 from fastapi import FastAPI
@@ -134,3 +136,52 @@ async def test_stream_submission_marks_source_and_reuses_generation_pipeline(sto
     assert captured["source"] == "speech_stream"
     assert captured["request"].engine == "voxtral"
     assert captured["request"].keep_audio is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("keep", [False, True])
+async def test_start_retry_recovers_same_session_without_resolving_voice_again(storage, monkeypatch, keep):
+    manager = service.SpeechSessions()
+    monkeypatch.setattr(service, "sessions", manager)
+    monkeypatch.setattr("backend.routes.speech_sessions.sessions", manager)
+    app = FastAPI()
+    app.include_router(router)
+    token = current_client_id.set("agent")
+    request = {"request_id": str(uuid4()), "keep_audio": keep}
+    try:
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+            created = await client.post("/speak/sessions", json=request)
+            assert created.status_code == 200
+            assert created.json()["session_id"] == request["request_id"]
+            s = manager.get(request["request_id"], "agent")
+            task = s.task
+
+            # A retry after a lost reply must recover the original resolved
+            # voice, even if the binding changed while the producer waited.
+            with storage() as db:
+                db.query(MCPClientBinding).filter_by(client_id="agent").delete()
+                db.commit()
+            retried = await client.post("/speak/sessions", json=request)
+            assert retried.status_code == 200
+            assert retried.json() == created.json()
+            assert len(manager.sessions) == 1
+            assert s.task is task
+
+            conflict = await client.post("/speak/sessions", json={**request, "keep_audio": not keep})
+            assert conflict.status_code == 409
+            other_owner = current_client_id.set("another-agent")
+            try:
+                assert (await client.post("/speak/sessions", json=request)).status_code == 409
+            finally:
+                current_client_id.reset(other_owner)
+            assert (await client.post("/speak/sessions", json={"request_id": "invalid"})).status_code == 422
+
+            await client.post(f"/speak/sessions/{s.id}/append", json={"sequence": 0, "text": " "})
+            await client.post(f"/speak/sessions/{s.id}/finish", json={})
+            await s.task
+            terminal = await client.post("/speak/sessions", json=request)
+            assert terminal.json()["state"] == "completed"
+            assert len(manager.sessions) == 1
+    finally:
+        current_client_id.reset(token)
+        await manager.shutdown()

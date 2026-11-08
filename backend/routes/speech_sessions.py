@@ -1,6 +1,7 @@
 """Incremental speech producer API and single-sink playback acknowledgements."""
 
 from typing import Annotated
+from uuid import UUID
 
 from fastapi import APIRouter
 from pydantic import BaseModel, Field
@@ -15,6 +16,7 @@ class Start(BaseModel):
     profile: str | None = None
     language: str | None = None
     keep_audio: bool = False
+    request_id: UUID | None = None
 
 
 class Append(BaseModel):
@@ -35,7 +37,7 @@ def owned(session_id):
 
 @router.post("")
 async def start(data: Start):
-    return await start_session(**data.model_dump())
+    return await start_session(**data.model_dump(mode="json"))
 
 
 @router.get("/{session_id}")

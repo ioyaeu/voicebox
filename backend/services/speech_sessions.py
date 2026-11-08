@@ -73,6 +73,7 @@ class SpeechSession:
     cleanup: set = field(default_factory=set)
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     profile_revision: str | None = None
+    start_options: dict | None = None
 
 
 class GenerationSink:
@@ -147,6 +148,7 @@ class SpeechSessions:
             "acknowledged": s.acknowledged,
             "available_chars": BUFFER_LIMIT - s.outstanding_chars,
             "ready": list(s.ready),
+            "generating": bool(s.rendering or s.pending),
             "error": s.error,
         }
 
@@ -155,7 +157,19 @@ class SpeechSessions:
 
         publish("speech-session", {"session_id": s.id, "state": s.state})
 
-    def start(self, owner, options, profile_name, profile_revision=None):
+    def replay_start(self, owner, request_id, start_options):
+        s = self.sessions.get(request_id)
+        if s is None:
+            return None
+        if s.owner != owner or s.start_options != start_options:
+            raise HTTPException(409, "Start request id was already used for another request")
+        return self.snapshot(s)
+
+    def start(self, owner, options, profile_name, profile_revision=None, *, request_id=None, start_options=None):
+        if request_id:
+            previous = self.replay_start(owner, request_id, start_options)
+            if previous is not None:
+                return previous
         self.require_idle()
         # Keep only a small, bounded terminal status cache for retries.
         while len(self.sessions) >= 32:
@@ -163,10 +177,14 @@ class SpeechSessions:
             if old is None:
                 raise HTTPException(503, "Speech cleanup is still draining")
             del self.sessions[old]
-        s = SpeechSession(str(uuid.uuid4()), owner, dict(options), profile_name)
+        s = SpeechSession(request_id or str(uuid.uuid4()), owner, dict(options), profile_name)
         s.profile_revision = profile_revision
+        s.start_options = dict(start_options) if start_options is not None else None
         self.sessions[s.id] = s
         s.task = asyncio.create_task(self._run(s))
+        logger.info(
+            "Speech session %s started (engine=%s, keep_audio=%s)", s.id, options["engine"], options["keep_audio"]
+        )
         self.notify(s)
         return self.snapshot(s)
 
@@ -211,6 +229,7 @@ class SpeechSessions:
             s.error = error
             s.buffer = ""
             s.pending.clear()
+            logger.info("Speech session %s %s (acknowledged=%s)", s.id, s.state, s.acknowledged)
             self.notify(s)
         return self.snapshot(s)
 
@@ -231,6 +250,7 @@ class SpeechSessions:
                     raise HTTPException(409, "Only the next ready segment may be acknowledged")
                 segment = s.ready.popleft()
                 s.acknowledged = acknowledged
+                logger.info("Speech session %s acknowledged segment %s", s.id, acknowledged)
                 s.outstanding_chars -= segment["chars"]
                 # Mark before I/O so a retry can never replay already-heard text.
                 if not s.options["keep_audio"]:
@@ -264,6 +284,7 @@ class SpeechSessions:
                     if status == "failed":
                         raise RuntimeError(error or "Speech generation failed")
                     if status == "completed":
+                        logger.info("Speech session %s ready segment %s (%s)", s.id, s.next_segment, s.rendering)
                         s.ready.append(
                             {"sequence": s.next_segment, "generation_id": s.rendering, "chars": rendering_chars}
                         )
@@ -282,6 +303,7 @@ class SpeechSessions:
                     render_started = time.monotonic()
                 if s.state == "draining" and not s.pending and not s.rendering and not s.ready:
                     s.state = "completed"
+                    logger.info("Speech session %s completed", s.id)
                     self.notify(s)
                     break
                 await asyncio.sleep(self.poll_interval)
@@ -328,19 +350,26 @@ class SpeechSessions:
 sessions = SpeechSessions()
 
 
-async def start_session(profile=None, language=None, keep_audio=False):
+async def start_session(profile=None, language=None, keep_audio=False, request_id=None):
     """Resolve binding once. No personality rewrite or engine override per delta."""
+    from ..mcp_server.context import current_client_id
+
+    owner = current_client_id.get()
+    start_options = dict(profile=profile, language=language, keep_audio=keep_audio)
+    if request_id:
+        previous = sessions.replay_start(owner, request_id, start_options)
+        if previous is not None:
+            return previous
+    sessions.require_idle()
+
     from ..backends import resolve_model_size_for_engine
     from ..database import MCPClientBinding
     from ..database.session import SessionLocal
-    from ..mcp_server.context import current_client_id
     from ..mcp_server.resolve import resolve_bound_engine, resolve_profile
     from ..models import GenerationRequest
     from ..routes.generations import _raise_if_realtime_stream_active, _resolve_generation_engine
     from .profiles import validate_profile_engine
 
-    owner = current_client_id.get()
-    sessions.require_idle()
     with SessionLocal() as db:
         vp = resolve_profile(profile, owner, db)
         if vp is None:
@@ -365,7 +394,9 @@ async def start_session(profile=None, language=None, keep_audio=False):
             keep_audio=keep_audio,
             normalize=True,
         )
-        return sessions.start(owner, options, vp.name, str(vp.updated_at))
+        return sessions.start(
+            owner, options, vp.name, str(vp.updated_at), request_id=request_id, start_options=start_options
+        )
 
 
 async def cleanup_interrupted_sessions(db):

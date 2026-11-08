@@ -88,11 +88,13 @@ async def test_finish_waits_for_playback_and_ack_is_idempotent(keep):
     s = start(manager, keep)
     manager.append(s, 0, "A short sentence, deliberately left without punctuation")
     manager.finish(s)
+    assert manager.snapshot(s)["generating"] is True
     await manager.playback(s, "renderer-one")
     await until(lambda: bool(sink.jobs))
     sink.jobs["0"] = "completed"
     await until(lambda: bool(s.ready))
     assert s.state == "draining"
+    assert manager.snapshot(s)["generating"] is False
     # Repeated heartbeats during pause must not delete, advance, or complete.
     for _ in range(4):
         response = await manager.playback(s, "renderer-one")

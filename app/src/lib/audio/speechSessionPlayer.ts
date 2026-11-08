@@ -2,8 +2,11 @@ export interface SpeechSnapshot {
   session_id: string;
   state: 'accepting' | 'draining' | 'completed' | 'cancelled' | 'failed';
   ready: { sequence: number; generation_id: string }[];
+  generating?: boolean;
   error: string | null;
 }
+
+export type SpeechPlaybackStatus = 'waiting' | 'generating' | 'playing';
 
 export interface PlaybackUpdate {
   renderer: string;
@@ -17,6 +20,7 @@ interface PlayerIO {
   audio: (generationId: string) => HTMLAudioElement;
   changed: (state: {
     paused: boolean;
+    status: SpeechPlaybackStatus;
     elapsedMs: number;
     error: string | null;
     done: boolean;
@@ -38,6 +42,8 @@ export class SpeechSessionPlayer {
   private error: string | undefined;
   private stopped = false;
   private failures = 0;
+  private playing = false;
+  private generating = false;
 
   constructor(private readonly io: PlayerIO) {}
 
@@ -67,6 +73,12 @@ export class SpeechSessionPlayer {
   private report(done = false) {
     this.io.changed({
       paused: this.paused,
+      status:
+        this.playing && !this.paused
+          ? 'playing'
+          : this.audio || this.generating
+            ? 'generating'
+            : 'waiting',
       elapsedMs: this.elapsed + (this.audio?.currentTime ?? 0) * 1000,
       error: this.error ?? null,
       done,
@@ -74,9 +86,13 @@ export class SpeechSessionPlayer {
   }
 
   private releaseAudio() {
+    this.playing = false;
     if (!this.audio) return;
     this.audio.onended = null;
     this.audio.onerror = null;
+    this.audio.onplaying = null;
+    this.audio.onwaiting = null;
+    this.audio.onpause = null;
     this.audio.pause();
     this.audio.removeAttribute('src');
     this.audio.load();
@@ -103,6 +119,7 @@ export class SpeechSessionPlayer {
         stopped: this.stopped,
       });
       if (this.disposed) return;
+      this.generating = snapshot.generating ?? false;
       this.failures = 0;
       if (['completed', 'cancelled', 'failed'].includes(snapshot.state)) {
         this.error = snapshot.error ?? this.error;
@@ -122,6 +139,16 @@ export class SpeechSessionPlayer {
       ) {
         const audio = this.io.audio(next.generation_id);
         this.audio = audio;
+        audio.onplaying = () => {
+          if (this.audio !== audio || this.disposed) return;
+          this.playing = true;
+          this.report();
+        };
+        audio.onwaiting = audio.onpause = () => {
+          if (this.audio !== audio || this.disposed) return;
+          this.playing = false;
+          this.report();
+        };
         audio.onended = () => {
           if (this.audio !== audio || this.disposed) return;
           this.elapsed += audio.currentTime * 1000;

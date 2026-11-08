@@ -37,6 +37,14 @@ means retry the **same** sequence and text later. Other validation errors must
 not be retried blindly. The tools report these service errors through MCP's
 normal tool-error surface, not HTTP status codes in JSON-RPC.
 
+REST producers may supply a random UUID `request_id` on start. It becomes the
+session id, so retrying the same request after a timeout recovers its snapshot
+and cancellation can address a lost start reply. Reusing that id with another
+owner or different start options returns 409. Completed/failed snapshots are
+also replayed while present in the bounded session cache; a retry never
+restarts a cached session. The VS Code bridge uses this contract with the same
+retention behavior for temporary and kept audio.
+
 Send spoken prose only, not raw Markdown, tool output, code, or reasoning.
 `speak` retains its full-text Markdown cleanup, truncation and personality
 rewrite options. Streaming deliberately does not rewrite every fragment or
@@ -72,6 +80,12 @@ not a successful listen. Lost ack replies retry the ack without replaying the
 segment. Events are hints: current state is polled, and active session events
 are replayed on SSE reconnect and heartbeat. Backend completion events from
 individual generations do not control stream playback.
+
+The pill distinguishes an open session waiting for text, audio preparation,
+and actual media playback. The server's `generating` flag covers queued or
+in-flight segments; the media element's playing/waiting/pause events control
+the playback label. An idle session must not display Speaking or animate as
+if sound were playing. Pause and stop remain available between segments.
 
 States: `accepting`, `draining`, `completed`, `cancelled`, `failed`. `finish`
 returns `draining`; only acknowledgement of all audio leads to `completed`.
@@ -151,6 +165,17 @@ the supported desktop platforms; unit tests do not validate speakers or GPU
 latency. Main-window manual playback remains independent of the pill.
 
 ## Next Phase
+
+Concurrent IDE conversations need a shared playback queue; they are not
+supported by the current global session reservation. The intended UX is one
+labelled pill per agent, one Playing and the others Queued/Waiting. Schedule
+available segments fairly at phrase boundaries, preserve each session's
+ordering, and let idle/paused sessions yield to ready ones. Keep a single
+generation worker, a single audio sink and a shared prefetch/memory budget.
+Pause/cancel and retention remain session-specific. Admission must validate
+all voices against the active engine, including the RVC base engine. Cover
+two concurrent producers, starvation, stop/pause, lost acknowledgements and
+temporary cleanup before lifting the single-session restriction.
 
 The first local macOS adapter prototype is described in
 [VS Code Agent Voice Bridge](VSCODE_AGENT_VOICE_BRIDGE.md). It preserves the
