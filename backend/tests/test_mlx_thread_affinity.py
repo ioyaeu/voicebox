@@ -1,8 +1,11 @@
 """Regression tests for MLX worker-thread affinity."""
 
 import asyncio
+import sys
 import threading
 import time
+from contextlib import nullcontext
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -19,6 +22,7 @@ from backend.backends.qwen_llm_backend import MLXQwenLLMBackend, PyTorchQwenLLMB
 from backend.backends.rvc import acquire as rvc_acquire, release as rvc_release
 from backend.backends.voxtral_backend import VOXTRAL_SAMPLE_RATE, VoxtralTTSBackend
 from backend.services import llm as llm_service
+from backend.tests.test_voxtral_memory import FakeMLX
 
 
 class _AudioResult:
@@ -331,6 +335,13 @@ class TestMLXThreadAffinity:
     async def test_voxtral_unload_waits_for_generation(self, monkeypatch):
         backend = VoxtralTTSBackend()
         seen_thread_ids: set[int] = set()
+        mx = FakeMLX()
+        monkeypatch.setitem(sys.modules, "mlx", SimpleNamespace(core=mx))
+        monkeypatch.setitem(sys.modules, "mlx.core", mx)
+        monkeypatch.setattr(
+            "backend.backends.voxtral_backend.VoxtralMemoryGuard",
+            lambda *_: nullcontext(SimpleNamespace(check=lambda: None)),
+        )
 
         def fake_load_model_sync() -> None:
             seen_thread_ids.add(threading.get_ident())
