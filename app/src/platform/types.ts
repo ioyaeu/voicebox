@@ -58,7 +58,10 @@ export interface ServerLogEntry {
 export interface PlatformLifecycle {
   startServer(remote?: boolean, modelsDir?: string | null): Promise<string>;
   stopServer(): Promise<void>;
-  restartServer(modelsDir?: string | null): Promise<string>;
+  /** `remote` overrides the network mode; omitted, the network-access setting applies. */
+  restartServer(modelsDir?: string | null, remote?: boolean): Promise<string>;
+  /** True when this app controls the server process, so stop/restart act on it. */
+  isServerManaged(): Promise<boolean>;
   setKeepServerRunning(keep: boolean): Promise<void>;
   setBackendOverride(backend?: string | null): Promise<void>;
   setupWindowCloseHandler(): Promise<void>;

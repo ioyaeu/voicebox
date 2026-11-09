@@ -15,9 +15,14 @@ class WebLifecycle implements PlatformLifecycle {
     // No-op for web - server is managed externally
   }
 
-  async restartServer(_modelsDir?: string | null): Promise<string> {
+  async restartServer(_modelsDir?: string | null, _remote?: boolean): Promise<string> {
     // No-op for web - server is managed externally
     return import.meta.env.VITE_SERVER_URL || getDefaultServerUrl();
+  }
+
+  async isServerManaged(): Promise<boolean> {
+    // The web app never controls the server process
+    return false;
   }
 
   async setKeepServerRunning(_keep: boolean): Promise<void> {

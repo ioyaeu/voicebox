@@ -395,11 +395,165 @@ fn kill_process_group_and_pid(pid: u32) {
         .output();
 }
 
+/// Like `is_process_alive`, but a zombie (exited, not yet reaped) counts as gone.
+#[cfg(unix)]
+fn is_process_running(pid: u32) -> bool {
+    use std::process::Command;
+
+    match Command::new("ps").args(["-o", "stat=", "-p", &pid.to_string()]).output() {
+        Ok(output) if output.status.success() => {
+            !String::from_utf8_lossy(&output.stdout).trim_start().starts_with('Z')
+        }
+        _ => false,
+    }
+}
+
+/// The executable of a running process (`ps -o comm=`: the full path on macOS,
+/// the first 15 characters of the name on Linux), or None if it has exited.
+#[cfg(unix)]
+fn process_executable(pid: u32) -> Option<String> {
+    use std::process::Command;
+
+    if !is_process_running(pid) {
+        return None;
+    }
+    let output = Command::new("ps").args(["-o", "comm=", "-p", &pid.to_string()]).output().ok()?;
+    let exe = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if output.status.success() && !exe.is_empty() {
+        Some(exe)
+    } else {
+        None
+    }
+}
+
+/// Whether `pid` is a running Voicebox server binary (voicebox-server, -cuda or
+/// -rocm), judged by its executable name rather than its command line, so a
+/// recycled PID running e.g. `tail voicebox-server.log` does not qualify.
+#[cfg(unix)]
+fn is_voicebox_server_process(pid: u32) -> bool {
+    process_executable(pid)
+        .map(|exe| exe.rsplit('/').next().unwrap_or("").starts_with("voicebox-server"))
+        .unwrap_or(false)
+}
+
+/// PIDs listening on a local TCP port.
+#[cfg(unix)]
+fn listening_pids(port: u16) -> Vec<u32> {
+    use std::process::Command;
+
+    Command::new("lsof")
+        .args(["-nP", "-t", &format!("-iTCP:{}", port), "-sTCP:LISTEN"])
+        .output()
+        .map(|output| {
+            String::from_utf8_lossy(&output.stdout)
+                .lines()
+                .filter_map(|line| line.trim().parse::<u32>().ok())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// `pid` and all of its descendants (parents before children), each with its
+/// executable at collection time.
+#[cfg(unix)]
+fn process_tree(pid: u32) -> Vec<(u32, String)> {
+    use std::process::Command;
+
+    let mut pids = vec![pid];
+    let mut index = 0;
+    while index < pids.len() {
+        if let Ok(output) = Command::new("pgrep").args(["-P", &pids[index].to_string()]).output() {
+            for line in String::from_utf8_lossy(&output.stdout).lines() {
+                if let Ok(child) = line.trim().parse::<u32>() {
+                    if !pids.contains(&child) {
+                        pids.push(child);
+                    }
+                }
+            }
+        }
+        index += 1;
+    }
+    pids.into_iter()
+        .filter_map(|p| process_executable(p).map(|exe| (p, exe)))
+        .collect()
+}
+
+/// How long a stopping server gets to exit on SIGTERM before SIGKILL. Kept
+/// below the 5 s window-close timeout, so a stop triggered by closing the
+/// window still reaches its SIGKILL fallback before the app exits.
+#[cfg(unix)]
+const SERVER_STOP_GRACE: std::time::Duration = std::time::Duration::from_secs(3);
+
+/// Stop a Voicebox server process and everything it spawned.
+///
+/// The bundled CPU sidecar is a PyInstaller --onefile binary: the PID we spawn
+/// is a bootloader, and its child Python process is the one serving the port.
+/// The sidecar shares the app's process group (tauri-plugin-shell does not
+/// create one), so `kill -- -PID` reaches nothing, and SIGKILL on the
+/// bootloader alone orphans the child, which keeps serving the port. So:
+/// collect the tree first (children get reparented once their parent dies),
+/// send SIGTERM to every process (uvicorn shuts down cleanly in well under a
+/// second), then SIGKILL whatever is still running after the grace period.
+#[cfg(unix)]
+async fn terminate_server_tree(pid: u32) {
+    use std::process::Command;
+
+    // The stored PID may be stale (server crashed) and since reused by an
+    // unrelated process: only act on something that is still a Voicebox server.
+    if !is_voicebox_server_process(pid) {
+        println!("stop_server: PID {} is not a running Voicebox server, leaving it alone", pid);
+        return;
+    }
+
+    let tree = process_tree(pid);
+    println!("stop_server: sending SIGTERM to {:?}", tree.iter().map(|(p, _)| p).collect::<Vec<_>>());
+    for (p, _) in &tree {
+        let _ = Command::new("kill").args(["-TERM", &p.to_string()]).output();
+    }
+
+    let deadline = tokio::time::Instant::now() + SERVER_STOP_GRACE;
+    while tree.iter().any(|(p, _)| is_process_running(*p)) && tokio::time::Instant::now() < deadline {
+        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+    }
+
+    for (p, exe) in &tree {
+        // Re-check identity: a PID that exited during the grace period may
+        // already belong to another process.
+        if process_executable(*p).as_deref() == Some(exe.as_str()) {
+            println!("stop_server: PID {} still running after SIGTERM, sending SIGKILL", p);
+            let _ = Command::new("kill").args(["-9", &p.to_string()]).output();
+        }
+    }
+}
+
+/// Whether the server PID this app tracks is still a live Voicebox server.
+/// Windows keeps the previous behavior (a tracked PID counts as live).
+fn tracked_server_alive(pid: u32) -> bool {
+    #[cfg(unix)]
+    {
+        is_voicebox_server_process(pid)
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = pid;
+        true
+    }
+}
+
 struct ServerState {
+    /// Serializes start / stop / restart, so concurrent callers (startup, the
+    /// settings buttons, GPU switching, window close) cannot interleave between
+    /// "is a server running?" and "spawn one" and end up with two servers or an
+    /// untracked one. Held for the whole command, including the readiness wait.
+    lifecycle: tokio::sync::Mutex<()>,
     child: Mutex<Option<tauri_plugin_shell::process::CommandChild>>,
     server_pid: Mutex<Option<u32>>,
     keep_running_on_close: Mutex<bool>,
     models_dir: Mutex<Option<String>>,
+    /// Bind the server to all interfaces (network access). Remembered from the
+    /// last `start_server`/`restart_server` call that set it, so a restart that
+    /// does not pass it keeps the current mode instead of falling back to local.
+    remote: Mutex<bool>,
     /// Override the backend selection: Some("cpu") forces the CPU sidecar even
     /// when GPU binaries exist (solving the Windows catch-22 where an active
     /// .exe cannot be deleted), while Some("cuda")/Some("rocm") pin a specific
@@ -466,6 +620,17 @@ async fn start_server(
     remote: Option<bool>,
     models_dir: Option<String>,
 ) -> Result<String, String> {
+    let _lifecycle = state.lifecycle.lock().await;
+    start_server_locked(app, state.inner(), remote, models_dir).await
+}
+
+/// `start_server` body; the caller holds `state.lifecycle`.
+async fn start_server_locked(
+    app: tauri::AppHandle,
+    state: &ServerState,
+    remote: Option<bool>,
+    models_dir: Option<String>,
+) -> Result<String, String> {
     // Store models_dir for use on restart (empty string means reset to default)
     if let Some(ref dir) = models_dir {
         if dir.is_empty() {
@@ -474,9 +639,21 @@ async fn start_server(
             *state.models_dir.lock().unwrap() = Some(dir.clone());
         }
     }
-    // Check if server is already running (managed by this app instance)
+    // Store the network mode for later restarts; None keeps the current one.
+    if let Some(remote) = remote {
+        *state.remote.lock().unwrap() = remote;
+    }
+    let is_remote = *state.remote.lock().unwrap();
+    // Check if server is already running (managed by this app instance). A
+    // tracked server that has since died (crash) must not block a new start.
     if state.child.lock().unwrap().is_some() {
-        return Ok(format!("http://127.0.0.1:{}", SERVER_PORT));
+        let tracked_pid = *state.server_pid.lock().unwrap();
+        if tracked_pid.map(tracked_server_alive).unwrap_or(false) {
+            return Ok(format!("http://127.0.0.1:{}", SERVER_PORT));
+        }
+        println!("start_server: the tracked server is gone, starting a new one");
+        let _ = state.child.lock().unwrap().take();
+        let _ = state.server_pid.lock().unwrap().take();
     }
 
     // Get app data directory early so port reuse can tell intentional
@@ -508,23 +685,40 @@ async fn start_server(
                     let pid_str = parts[1];
                     if command.contains("voicebox") {
                         if let Ok(pid) = pid_str.parse::<u32>() {
-                            if let Some(process_command) = get_process_command(pid) {
-                                if let Some(parent_pid) = extract_parent_pid(&process_command) {
-                                    let keep_running_sentinel = data_dir.join(".keep-running");
-                                    if !is_process_alive(parent_pid) && !keep_running_sentinel.exists() {
-                                        println!(
-                                            "Found orphaned voicebox-server on port {} (PID: {}, parent PID {} is gone), killing it before restart",
-                                            SERVER_PORT, pid, parent_pid
-                                        );
-                                        kill_process_group_and_pid(pid);
-                                        killed_orphan = true;
-                                        continue;
-                                    }
+                            let parent_pid = get_process_command(pid)
+                                .and_then(|process_command| extract_parent_pid(&process_command));
+                            if let Some(parent_pid) = parent_pid {
+                                let keep_running_sentinel = data_dir.join(".keep-running");
+                                if !is_process_alive(parent_pid) && !keep_running_sentinel.exists() {
+                                    println!(
+                                        "Found orphaned voicebox-server on port {} (PID: {}, parent PID {} is gone), killing it before restart",
+                                        SERVER_PORT, pid, parent_pid
+                                    );
+                                    kill_process_group_and_pid(pid);
+                                    killed_orphan = true;
+                                    continue;
                                 }
                             }
-                            println!("Found existing voicebox-server on port {} (PID: {}), reusing it", SERVER_PORT, pid);
-                            // Store the PID so we can kill it on exit if needed
-                            *state.server_pid.lock().unwrap() = Some(pid);
+                            // Adopt it (track its PID, so stop/restart/exit act on
+                            // it) only if it is ours or was kept running by a
+                            // previous session whose app is gone. A server owned
+                            // by another live Voicebox instance, or started by
+                            // hand without --parent-pid, is reused but left to
+                            // its owner: stopping it from here would pull it out
+                            // from under them.
+                            let adopt = matches!(
+                                parent_pid,
+                                Some(ppid) if ppid == std::process::id() || !is_process_alive(ppid)
+                            );
+                            println!(
+                                "Found existing voicebox-server on port {} (PID: {}), reusing it ({})",
+                                SERVER_PORT,
+                                pid,
+                                if adopt { "adopted" } else { "owned elsewhere" }
+                            );
+                            if adopt {
+                                *state.server_pid.lock().unwrap() = Some(pid);
+                            }
                             return Ok(format!("http://127.0.0.1:{}", SERVER_PORT));
                         }
                     } else {
@@ -634,7 +828,7 @@ async fn start_server(
     println!("=================================================================");
     println!("Starting voicebox-server sidecar");
     println!("Data directory: {:?}", data_dir);
-    println!("Remote mode: {}", remote.unwrap_or(false));
+    println!("Remote mode: {}", is_remote);
 
     // Check for ROCm backend in data directory (onedir layout: backends/rocm/)
     let rocm_binary = {
@@ -761,7 +955,6 @@ async fn start_server(
         .to_string();
     let port_str = SERVER_PORT.to_string();
     let parent_pid_str = std::process::id().to_string();
-    let is_remote = remote.unwrap_or(false);
 
     // Resolve the custom models directory from the parameter or stored state
     let effective_models_dir = models_dir.or_else(|| state.models_dir.lock().unwrap().clone());
@@ -1043,33 +1236,46 @@ async fn start_server(
 
 #[command]
 async fn stop_server(state: State<'_, ServerState>) -> Result<(), String> {
+    let _lifecycle = state.lifecycle.lock().await;
+    stop_server_locked(state.inner()).await
+}
+
+/// `stop_server` body; the caller holds `state.lifecycle`. On Unix, `Ok` means
+/// the tracked server is gone and nothing listens on the server port anymore.
+async fn stop_server_locked(state: &ServerState) -> Result<(), String> {
     let pid = state.server_pid.lock().unwrap().take();
     let _child = state.child.lock().unwrap().take();
-    
+
     if let Some(pid) = pid {
         println!("stop_server: Stopping server with PID: {}", pid);
-        
+
         #[cfg(unix)]
         {
-            use std::process::Command;
-            // Kill process group with SIGTERM first
-            let _ = Command::new("kill")
-                .args(["-TERM", "--", &format!("-{}", pid)])
-                .output();
-            
-            // Brief wait then force kill
-            std::thread::sleep(std::time::Duration::from_millis(100));
-            
-            let _ = Command::new("kill")
-                .args(["-9", "--", &format!("-{}", pid)])
-                .output();
-            let _ = Command::new("kill")
-                .args(["-9", &pid.to_string()])
-                .output();
-            
-            println!("stop_server: Process group kill completed");
+            terminate_server_tree(pid).await;
+
+            // The tracked PID can miss part of our server (e.g. a Python child
+            // orphaned by an earlier bootloader-only kill): stop any Voicebox
+            // server this app instance spawned that still holds the port.
+            let app_pid = std::process::id();
+            for listener in listening_pids(SERVER_PORT) {
+                let spawned_by_us = is_voicebox_server_process(listener)
+                    && get_process_command(listener)
+                        .and_then(|command| extract_parent_pid(&command))
+                        == Some(app_pid);
+                if spawned_by_us {
+                    terminate_server_tree(listener).await;
+                }
+            }
+            // Never report a stop while something still serves the port.
+            if let Some(listener) = listening_pids(SERVER_PORT).first() {
+                return Err(format!(
+                    "The server was stopped, but port {} is still in use by another process (PID {}).",
+                    SERVER_PORT, listener
+                ));
+            }
+            println!("stop_server: server stopped, port {} is free", SERVER_PORT);
         }
-        
+
         #[cfg(windows)]
         {
             // Send graceful shutdown via HTTP — the server's parent-pid watchdog
@@ -1087,7 +1293,7 @@ async fn stop_server(state: State<'_, ServerState>) -> Result<(), String> {
             println!("Shutdown request sent (server watchdog will handle cleanup)");
         }
     }
-    
+
     Ok(())
 }
 
@@ -1096,7 +1302,10 @@ async fn restart_server(
     app: tauri::AppHandle,
     state: State<'_, ServerState>,
     models_dir: Option<String>,
+    remote: Option<bool>,
 ) -> Result<String, String> {
+    let _lifecycle = state.lifecycle.lock().await;
+    let state = state.inner();
     println!("restart_server: stopping current server...");
 
     // Update stored models_dir: empty string means reset to default, non-empty means set
@@ -1109,15 +1318,26 @@ async fn restart_server(
     }
 
     // Stop the current server
-    stop_server(state.clone()).await?;
+    stop_server_locked(state).await?;
 
     // Wait for port to be released
     println!("restart_server: waiting for port release...");
     tokio::time::sleep(tokio::time::Duration::from_millis(1000)).await;
 
-    // Start server again (will auto-detect GPU binary and use stored models_dir)
+    // Start server again (will auto-detect GPU binary and use stored models_dir;
+    // `remote: None` keeps the current network mode)
     println!("restart_server: starting server...");
-    start_server(app, state.clone(), None, None).await
+    start_server_locked(app, state, remote, None).await
+}
+
+/// Whether this app instance controls a live server process: one it spawned,
+/// or a Voicebox server it adopted from a previous keep-running session. Only
+/// then can stop/restart act on it; an external server (uvicorn, Docker, another
+/// Voicebox instance) is not managed, and neither is a tracked server that died.
+#[command]
+async fn is_server_managed(state: State<'_, ServerState>) -> Result<bool, String> {
+    let pid = *state.server_pid.lock().unwrap();
+    Ok(pid.map(tracked_server_alive).unwrap_or(false))
 }
 
 #[command]
@@ -1639,10 +1859,12 @@ pub fn run() {
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_shell::init())
         .manage(ServerState {
+            lifecycle: tokio::sync::Mutex::new(()),
             child: Mutex::new(None),
             server_pid: Mutex::new(None),
             keep_running_on_close: Mutex::new(false),
             models_dir: Mutex::new(None),
+            remote: Mutex::new(false),
             backend_override: Mutex::new(None),
         })
         .manage(audio_capture::AudioCaptureState::new())
@@ -1764,6 +1986,7 @@ pub fn run() {
             start_server,
             stop_server,
             restart_server,
+            is_server_managed,
             set_keep_server_running,
             set_backend_override,
             start_system_audio_capture,

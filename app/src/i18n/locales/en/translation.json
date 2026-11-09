@@ -868,6 +868,25 @@
         "offline": "Offline",
         "online": "Online"
       },
+      "server": {
+        "start": "Start",
+        "stop": "Stop",
+        "restart": "Restart",
+        "startHint": "Start the local Voicebox server",
+        "stopHint": "Stop the background server. Generation, dictation and MCP clients stop working until it is started again.",
+        "restartHint": "Restart the background server. Also applies the network access setting.",
+        "starting": "Starting",
+        "stopping": "Stopping",
+        "restarting": "Restarting",
+        "started": "Server started",
+        "stopped": "Server stopped",
+        "restarted": "Server restarted",
+        "startFailed": "Could not start the server",
+        "stopFailed": "Could not stop the server",
+        "restartFailed": "Could not restart the server",
+        "external": "External",
+        "externalHint": "This server was started outside Voicebox, so it can't be stopped or restarted from here."
+      },
       "updates": {
         "title": "App Updates",
         "devSuffix": " (dev)",

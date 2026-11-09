@@ -30,10 +30,14 @@ class TauriLifecycle implements PlatformLifecycle {
     }
   }
 
-  async restartServer(modelsDir?: string | null): Promise<string> {
+  async restartServer(modelsDir?: string | null, remote?: boolean): Promise<string> {
     try {
+      // Follow the current network-access setting unless the caller overrides
+      // it. Imported lazily to avoid a circular dependency, as in the close handler.
+      const { useServerStore } = await import('@/stores/serverStore');
       const result = await invoke<string>('restart_server', {
         modelsDir: modelsDir ?? undefined,
+        remote: remote ?? useServerStore.getState().mode === 'remote',
       });
       console.log('Server restarted:', result);
       this.onServerReady?.();
@@ -42,6 +46,10 @@ class TauriLifecycle implements PlatformLifecycle {
       console.error('Failed to restart server:', error);
       throw error;
     }
+  }
+
+  async isServerManaged(): Promise<boolean> {
+    return invoke<boolean>('is_server_managed');
   }
 
   async setKeepServerRunning(keepRunning: boolean): Promise<void> {

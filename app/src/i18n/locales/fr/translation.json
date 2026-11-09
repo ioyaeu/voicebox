@@ -797,6 +797,25 @@
         "offline": "Hors ligne",
         "online": "En ligne"
       },
+      "server": {
+        "start": "Démarrer",
+        "stop": "Arrêter",
+        "restart": "Redémarrer",
+        "startHint": "Démarrer le serveur Voicebox local",
+        "stopHint": "Arrêter le serveur en arrière-plan. La génération, la dictée et les clients MCP ne fonctionnent plus jusqu'à son redémarrage.",
+        "restartHint": "Redémarrer le serveur en arrière-plan. Applique aussi le réglage d'accès réseau.",
+        "starting": "Démarrage",
+        "stopping": "Arrêt",
+        "restarting": "Redémarrage",
+        "started": "Serveur démarré",
+        "stopped": "Serveur arrêté",
+        "restarted": "Serveur redémarré",
+        "startFailed": "Impossible de démarrer le serveur",
+        "stopFailed": "Impossible d'arrêter le serveur",
+        "restartFailed": "Impossible de redémarrer le serveur",
+        "external": "Externe",
+        "externalHint": "Ce serveur a été lancé en dehors de Voicebox : il ne peut être ni arrêté ni redémarré d'ici."
+      },
       "updates": {
         "title": "Mises à jour de l'application",
         "devSuffix": " (dev)",

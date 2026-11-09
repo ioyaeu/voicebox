@@ -16,6 +16,7 @@ import { usePlatform } from '@/platform/PlatformContext';
 import { useServerStore } from '@/stores/serverStore';
 import { CloudSection } from './CloudSection';
 import { LanguageSelect } from './LanguageSelect';
+import { ServerControls } from './ServerControls';
 import { SettingRow, SettingSection } from './SettingRow';
 import { ThemeSelect } from './ThemeSelect';
 
@@ -115,7 +116,12 @@ export function GeneralPage() {
           title={t('settings.general.serverUrl.title')}
           description={t('settings.general.serverUrl.description')}
           action={
-            <ConnectionStatus health={health} isLoading={isLoading} healthError={healthError} />
+            <ServerControls
+              status={
+                <ConnectionStatus health={health} isLoading={isLoading} healthError={healthError} />
+              }
+              online={isLoading ? undefined : Boolean(health) && !healthError}
+            />
           }
         >
           <Form {...form}>
